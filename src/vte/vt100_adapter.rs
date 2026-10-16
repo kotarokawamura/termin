@@ -24,7 +24,7 @@ impl TerminalBackend for Vt100Adapter {
     fn resize(&mut self, rows: u16, cols: u16) {
         self.rows = rows;
         self.cols = cols;
-        self.parser.set_size(rows, cols);
+        self.parser.screen_mut().set_size(rows, cols);
     }
 
     fn read_cell(&self, row: u16, col: u16) -> RenderableCell {

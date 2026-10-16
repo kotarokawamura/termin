@@ -1,4 +1,5 @@
-use eframe::egui;
+use eframe::{egui, Frame};
+use egui::Ui;
 use crate::config::prefs_ui::PreferencesWindow;
 use crate::config::theme::ThemeSettings;
 use crate::ui::workspace::Workspace;
@@ -29,8 +30,7 @@ impl TerminechanApp {
         }
 
         let border = self.settings.effective_border_width() + 2.0;
-        let screen_rect = ctx.screen_rect();
-
+        let screen_rect = ctx.content_rect();
         let Some(pos) = ctx.input(|i| i.pointer.hover_pos()) else {
             return;
         };
@@ -80,19 +80,21 @@ impl TerminechanApp {
 }
 
 impl eframe::App for TerminechanApp {
-    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+    fn ui(&mut self, ui: &mut Ui, _frame: &mut Frame) {
+        let ctx = ui.ctx().clone();
+
         // Poll active PTY sessions and request repaint if new output arrived
         if self.workspace.poll_sessions() {
             ctx.request_repaint();
         }
         ctx.request_repaint_after(std::time::Duration::from_millis(30));
 
-        self.handle_custom_resize_frame(ctx);
+        self.handle_custom_resize_frame(&ctx);
 
         // Apply separator color to egui style
-        let mut style = (*ctx.style()).clone();
-        style.visuals.widgets.noninteractive.bg_stroke.color = self.settings.separator_color();
-        ctx.set_style(style);
+        ctx.all_styles_mut(|style| {
+            style.visuals.widgets.noninteractive.bg_stroke.color = self.settings.separator_color();
+        });
 
         let is_maximized = ctx.input(|i| i.viewport().maximized.unwrap_or(false));
         let border_w = if is_maximized {
@@ -101,7 +103,7 @@ impl eframe::App for TerminechanApp {
             self.settings.effective_border_width()
         };
 
-        let frame = egui::Frame::none()
+        let frame = egui::Frame::new()
             .fill(self.settings.frame_bg_color())
             .inner_margin(border_w)
             .stroke(egui::Stroke::new(
@@ -109,16 +111,16 @@ impl eframe::App for TerminechanApp {
                 self.settings.frame_border_color(),
             ));
 
-        egui::CentralPanel::default().frame(frame).show(ctx, |ui| {
+        egui::CentralPanel::default().frame(frame).show(ui, |ui: &mut Ui| {
             self.workspace.ui(
                 ui,
-                ctx,
+                &ctx,
                 &self.settings,
                 &mut self.prefs_window.open,
             );
         });
 
         // Preferences modal / floating window
-        self.prefs_window.ui(ctx, &mut self.settings);
+        self.prefs_window.ui(&ctx, &mut self.settings);
     }
 }

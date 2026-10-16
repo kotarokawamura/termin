@@ -41,10 +41,9 @@ impl TerminalPane {
         let bytes = self.session.read_output();
         if !bytes.is_empty() {
             self.backend.process_bytes(&bytes);
-            true
-        } else {
-            false
+            return true;
         }
+        return false;
     }
 
     pub fn is_alive(&mut self) -> bool {
@@ -158,6 +157,7 @@ impl TerminalPane {
                     cur_rect,
                     0.0,
                     egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(160, 160, 160)),
+                    egui::StrokeKind::Outside
                 );
             }
         }

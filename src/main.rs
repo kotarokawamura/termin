@@ -1,6 +1,6 @@
 mod config;
 mod session;
-mod ui;
+pub mod ui;
 mod vte;
 
 use eframe::egui;
@@ -9,7 +9,7 @@ use ui::app::TerminechanApp;
 fn main() -> Result<(), eframe::Error> {
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_title("Terminechan")
+            .with_title("terminechan")
             .with_decorations(false)
             .with_inner_size([1100.0, 720.0])
             .with_min_inner_size([400.0, 260.0]),
@@ -17,7 +17,7 @@ fn main() -> Result<(), eframe::Error> {
     };
 
     eframe::run_native(
-        "Terminechan",
+        "terminechan",
         options,
         Box::new(|cc| Ok(Box::new(TerminechanApp::new(cc)))),
     )

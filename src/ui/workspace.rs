@@ -212,21 +212,6 @@ struct TreeBehavior<'a> {
 }
 
 impl<'a> egui_tiles::Behavior<TerminalPane> for TreeBehavior<'a> {
-    fn tab_title_for_pane(&mut self, pane: &TerminalPane) -> egui::WidgetText {
-        pane.title.clone().into()
-    }
-
-    fn simplification_options(&self) -> egui_tiles::SimplificationOptions {
-        egui_tiles::SimplificationOptions {
-            all_panes_must_have_tabs: false,
-            ..Default::default()
-        }
-    }
-
-    fn gap_width(&self, _style: &egui::Style) -> f32 {
-        2.0
-    }
-
     fn pane_ui(
         &mut self,
         ui: &mut egui::Ui,
@@ -256,6 +241,21 @@ impl<'a> egui_tiles::Behavior<TerminalPane> for TreeBehavior<'a> {
             UiResponse::DragStarted
         } else {
             UiResponse::None
+        }
+    }
+
+    fn tab_title_for_pane(&mut self, pane: &TerminalPane) -> egui::WidgetText {
+        pane.title.clone().into()
+    }
+
+    fn gap_width(&self, _style: &egui::Style) -> f32 {
+        2.0
+    }
+
+    fn simplification_options(&self) -> egui_tiles::SimplificationOptions {
+        egui_tiles::SimplificationOptions {
+            all_panes_must_have_tabs: false,
+            ..Default::default()
         }
     }
 }
