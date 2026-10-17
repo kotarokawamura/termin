@@ -2,7 +2,7 @@ use eframe::egui;
 use crate::config::theme::ThemeSettings;
 
 #[derive(Clone, Copy, Debug)]
-pub enum TitlebarAction {
+pub enum TitleBarAction {
     ClosePane,
     MinimizeWindow,
     ToggleMaximizeWindow,
@@ -12,8 +12,8 @@ pub enum TitlebarAction {
     OpenPreferences,
 }
 
-pub struct TitlebarOutput {
-    pub action: Option<TitlebarAction>,
+pub struct TitleBarOutput {
+    pub action: Option<TitleBarAction>,
     pub start_tile_drag: bool,
     pub clicked: bool,
 }
@@ -25,8 +25,8 @@ pub fn render_titlebar(
     is_active: bool,
     is_top_right: bool,
     settings: &ThemeSettings,
-) -> TitlebarOutput {
-    let mut output = TitlebarOutput {
+) -> TitleBarOutput {
+    let mut output = TitleBarOutput {
         action: None,
         start_tile_drag: false,
         clicked: false,
@@ -62,10 +62,10 @@ pub fn render_titlebar(
     }
 
     if small_bar_button(&mut child_ui, "Split-H", fg_color, "Split Horizontally (Left/Right)").clicked() {
-        output.action = Some(TitlebarAction::SplitHorizontal);
+        output.action = Some(TitleBarAction::SplitHorizontal);
     }
     if small_bar_button(&mut child_ui, "Split-V", fg_color, "Split Vertically (Top/Bottom)").clicked() {
-        output.action = Some(TitlebarAction::SplitVertical);
+        output.action = Some(TitleBarAction::SplitVertical);
     }
 
     // 2. Title text or inline rename entry
@@ -90,15 +90,15 @@ pub fn render_titlebar(
     // 3. Right-side controls: [Gear] [Edit] ([—] [🗖] if top-right) [×]
     child_ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
         if small_bar_button(ui, " × ", fg_color, "Close this pane").clicked() {
-            output.action = Some(TitlebarAction::ClosePane);
+            output.action = Some(TitleBarAction::ClosePane);
         }
 
         if is_top_right {
             if small_bar_button(ui, " 🗖 ", fg_color, "Maximize / Restore window").clicked() {
-                output.action = Some(TitlebarAction::ToggleMaximizeWindow);
+                output.action = Some(TitleBarAction::ToggleMaximizeWindow);
             }
             if small_bar_button(ui, " — ", fg_color, "Minimize window").clicked() {
-                output.action = Some(TitlebarAction::MinimizeWindow);
+                output.action = Some(TitleBarAction::MinimizeWindow);
             }
         }
 
@@ -107,17 +107,17 @@ pub fn render_titlebar(
         }
 
         if small_bar_button(ui, " ⚙ ", fg_color, "Open CustomDragBar Preferences").clicked() {
-            output.action = Some(TitlebarAction::OpenPreferences);
+            output.action = Some(TitleBarAction::OpenPreferences);
         }
     });
 
     // 4. Titlebar background interaction (Double-click = Maximize, Drag = Move Window)
     if !*editing_title && !output.start_tile_drag && output.action.is_none() {
         if bar_resp.double_clicked() {
-            output.action = Some(TitlebarAction::ToggleMaximizeWindow);
+            output.action = Some(TitleBarAction::ToggleMaximizeWindow);
             output.clicked = true;
         } else if bar_resp.drag_started_by(egui::PointerButton::Primary) {
-            output.action = Some(TitlebarAction::StartWindowMove);
+            output.action = Some(TitleBarAction::StartWindowMove);
             output.clicked = true;
         } else if bar_resp.clicked() {
             output.clicked = true;

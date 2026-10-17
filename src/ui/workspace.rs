@@ -3,7 +3,7 @@ use eframe::egui;
 use egui_tiles::{Tile, TileId, Tiles, Tree, UiResponse};
 use crate::config::theme::ThemeSettings;
 use crate::ui::pane::TerminalPane;
-use crate::ui::titlebar::TitlebarAction;
+use crate::ui::titlebar::TitleBarAction;
 
 #[derive(Clone, Copy)]
 pub enum SplitAxis {
@@ -88,29 +88,29 @@ impl Workspace {
         // Execute deferred tree mutations (split, close, window controls)
         if let Some((tile_id, action)) = pending_action {
             match action {
-                TitlebarAction::ClosePane => {
+                TitleBarAction::ClosePane => {
                     self.remove_pane(tile_id);
                     if self.pane_count() == 0 {
                         ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                     }
                 }
-                TitlebarAction::SplitHorizontal => {
+                TitleBarAction::SplitHorizontal => {
                     self.split_pane(tile_id, SplitAxis::Horizontal);
                 }
-                TitlebarAction::SplitVertical => {
+                TitleBarAction::SplitVertical => {
                     self.split_pane(tile_id, SplitAxis::Vertical);
                 }
-                TitlebarAction::MinimizeWindow => {
+                TitleBarAction::MinimizeWindow => {
                     ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
                 }
-                TitlebarAction::ToggleMaximizeWindow => {
+                TitleBarAction::ToggleMaximizeWindow => {
                     let is_max = ctx.input(|i| i.viewport().maximized.unwrap_or(false));
                     ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(!is_max));
                 }
-                TitlebarAction::StartWindowMove => {
+                TitleBarAction::StartWindowMove => {
                     ctx.send_viewport_cmd(egui::ViewportCommand::StartDrag);
                 }
-                TitlebarAction::OpenPreferences => {
+                TitleBarAction::OpenPreferences => {
                     *prefs_open = true;
                 }
             }
@@ -207,7 +207,7 @@ struct TreeBehavior<'a> {
     focused_tile: &'a mut Option<TileId>,
     top_right_tile: Option<TileId>,
     recorded_rects: &'a mut HashMap<TileId, egui::Rect>,
-    pending_action: Option<(TileId, TitlebarAction)>,
+    pending_action: Option<(TileId, TitleBarAction)>,
     prefs_open: &'a mut bool,
 }
 
@@ -230,7 +230,7 @@ impl<'a> egui_tiles::Behavior<TerminalPane> for TreeBehavior<'a> {
         }
 
         if let Some(action) = output.action {
-            if matches!(action, TitlebarAction::OpenPreferences) {
+            if matches!(action, TitleBarAction::OpenPreferences) {
                 *self.prefs_open = true;
             } else {
                 self.pending_action = Some((tile_id, action));

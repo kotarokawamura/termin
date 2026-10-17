@@ -2,12 +2,12 @@ use eframe::egui;
 use crate::config::theme::ThemeSettings;
 use crate::session::local_pty::LocalPtySession;
 use crate::session::SessionDriver;
-use crate::ui::titlebar::{render_titlebar, TitlebarAction};
+use crate::ui::titlebar::{render_titlebar, TitleBarAction};
 use crate::vte::vt100_adapter::Vt100Adapter;
 use crate::vte::TerminalBackend;
 
 pub struct PaneUiOutput {
-    pub action: Option<TitlebarAction>,
+    pub action: Option<TitleBarAction>,
     pub start_tile_drag: bool,
     pub clicked_or_focused: bool,
 }

@@ -87,6 +87,8 @@ impl eframe::App for TerminechanApp {
         if self.workspace.poll_sessions() {
             ctx.request_repaint();
         }
+
+        //33FPS
         ctx.request_repaint_after(std::time::Duration::from_millis(30));
 
         self.handle_custom_resize_frame(&ctx);
