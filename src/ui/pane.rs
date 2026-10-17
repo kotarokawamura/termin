@@ -1,4 +1,5 @@
 use eframe::egui;
+//use egui::{KeyboardShortcut, Modifiers};
 use crate::config::theme::ThemeSettings;
 use crate::session::local_pty::LocalPtySession;
 use crate::session::SessionDriver;
@@ -43,7 +44,7 @@ impl TerminalPane {
             self.backend.process_bytes(&bytes);
             return true;
         }
-        return false;
+        false
     }
 
     pub fn is_alive(&mut self) -> bool {
@@ -97,6 +98,12 @@ impl TerminalPane {
         // Forward keyboard events to PTY when this pane is focused and not editing title
         if is_focused && !self.editing_title {
             self.handle_keyboard_input(ui);
+        }
+
+        //
+        let mut shortcut_key_action = None;
+        if is_focused && !self.editing_title {
+            shortcut_key_action = self.handle_shortcut_keyboard_input(ui);
         }
 
         // Draw cells
@@ -163,30 +170,64 @@ impl TerminalPane {
         }
 
         PaneUiOutput {
-            action: tb_out.action,
+            action: tb_out.action.or(shortcut_key_action),
             start_tile_drag: tb_out.start_tile_drag,
             clicked_or_focused,
         }
     }
-
-    fn handle_keyboard_input(&mut self, ui: &mut egui::Ui) {
+    fn handle_keyboard_input(&mut self, ui: &mut egui::Ui)  {
         let events = ui.input(|i| i.events.clone());
         for event in events {
             match event {
                 egui::Event::Text(text) => {
                     self.session.write_input(text.as_bytes());
                 }
+                _ => {}
+            }
+        }
+    }
+    fn handle_shortcut_keyboard_input(&mut self, ui: &mut egui::Ui) -> Option<TitleBarAction> {
+        let mut action = None;
+        let events = ui.input(|i| i.events.clone());
+        for event in events {
+            match event {
                 egui::Event::Key {
                     key,
                     pressed: true,
                     modifiers,
                     ..
                 } => {
-                    if modifiers.ctrl {
+                    // Ctrl + Alt の組み合わせ判定
+                    if modifiers.ctrl && modifiers.shift {
+                        match key {
+                            egui::Key::E => {
+                                action = Some(TitleBarAction::SplitHorizontal);
+                            }
+                            egui::Key::O => {
+                                action = Some(TitleBarAction::SplitVertical);
+                            }
+                            _ => {}
+                        }
+
+                    } else if modifiers.ctrl {
                         match key {
                             egui::Key::C => self.session.write_input(&[0x03]), // Ctrl+C (SIGINT)
                             egui::Key::D => self.session.write_input(&[0x04]), // Ctrl+D (EOF)
                             egui::Key::L => self.session.write_input(&[0x0c]), // Ctrl+L (Clear)
+                            egui::Key::A => self.session.write_input(&[0x01]), // Ctrl+A (行頭へ移動)
+                            egui::Key::B => self.session.write_input(&[0x02]), // Ctrl+B (1文字戻る)
+                            egui::Key::E => self.session.write_input(&[0x05]), // Ctrl+E (行末へ移動)
+                            egui::Key::F => self.session.write_input(&[0x06]), // Ctrl+F (1文字進む)
+                            egui::Key::H => self.session.write_input(&[0x08]), // Ctrl+H (バックスペース)
+                            egui::Key::J => self.session.write_input(&[0x0a]), // Ctrl+J (LF / 改行)
+                            egui::Key::K => self.session.write_input(&[0x0b]), // Ctrl+K (カーソル以降削除)
+                            egui::Key::N => self.session.write_input(&[0x0e]), // Ctrl+N (次の履歴)
+                            egui::Key::P => self.session.write_input(&[0x10]), // Ctrl+P (前の履歴)
+                            egui::Key::R => self.session.write_input(&[0x12]), // Ctrl+R (履歴検索)
+                            egui::Key::T => self.session.write_input(&[0x14]), // Ctrl+T (文字入れ替え)
+                            egui::Key::U => self.session.write_input(&[0x15]), // Ctrl+U (行頭まで削除)
+                            egui::Key::W => self.session.write_input(&[0x17]), // Ctrl+W (単語削除)
+                            egui::Key::Z => self.session.write_input(&[0x1a]), // Ctrl+Z (サスペンド)
                             _ => {}
                         }
                     } else {
@@ -199,6 +240,23 @@ impl TerminalPane {
                             egui::Key::ArrowDown => self.session.write_input(b"\x1b[B"),
                             egui::Key::ArrowRight => self.session.write_input(b"\x1b[C"),
                             egui::Key::ArrowLeft => self.session.write_input(b"\x1b[D"),
+                            egui::Key::Home => self.session.write_input(b"\x1b[H"),
+                            egui::Key::End => self.session.write_input(b"\x1b[F"),
+                            egui::Key::Delete => self.session.write_input(b"\x1b[3~"),
+                            egui::Key::PageUp => self.session.write_input(b"\x1b[5~"),
+                            egui::Key::PageDown => self.session.write_input(b"\x1b[6~"),
+                            egui::Key::F1 => self.session.write_input(b"\x1bOP"),
+                            egui::Key::F2 => self.session.write_input(b"\x1bOQ"),
+                            egui::Key::F3 => self.session.write_input(b"\x1bOR"),
+                            egui::Key::F4 => self.session.write_input(b"\x1bOS"),
+                            egui::Key::F5 => self.session.write_input(b"\x1b[15~"),
+                            egui::Key::F6 => self.session.write_input(b"\x1b[17~"),
+                            egui::Key::F7 => self.session.write_input(b"\x1b[18~"),
+                            egui::Key::F8 => self.session.write_input(b"\x1b[19~"),
+                            egui::Key::F9 => self.session.write_input(b"\x1b[20~"),
+                            egui::Key::F10 => self.session.write_input(b"\x1b[21~"),
+                            egui::Key::F11 => self.session.write_input(b"\x1b[23~"),
+                            egui::Key::F12 => self.session.write_input(b"\x1b[24~"),
                             _ => {}
                         }
                     }
@@ -206,5 +264,7 @@ impl TerminalPane {
                 _ => {}
             }
         }
+
+        action
     }
 }

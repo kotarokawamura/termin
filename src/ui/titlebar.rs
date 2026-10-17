@@ -61,10 +61,10 @@ pub fn render_titlebar(
         output.start_tile_drag = true;
     }
 
-    if small_bar_button(&mut child_ui, "Split-H", fg_color, "Split Horizontally (Left/Right)").clicked() {
+    if small_bar_button(&mut child_ui, "[Split-H]", fg_color, "Split Horizontally (Left/Right)").clicked() {
         output.action = Some(TitleBarAction::SplitHorizontal);
     }
-    if small_bar_button(&mut child_ui, "Split-V", fg_color, "Split Vertically (Top/Bottom)").clicked() {
+    if small_bar_button(&mut child_ui, "[Split-V]", fg_color, "Split Vertically (Top/Bottom)").clicked() {
         output.action = Some(TitleBarAction::SplitVertical);
     }
 
