@@ -4,6 +4,7 @@ use egui_tiles::{Tile, TileId, Tiles, Tree, UiResponse};
 use crate::config::theme::ThemeSettings;
 use crate::ui::pane::TerminalPane;
 use crate::ui::titlebar::TitleBarAction;
+use std::env;
 
 #[derive(Clone, Copy)]
 pub enum SplitAxis {
@@ -25,7 +26,7 @@ impl Workspace {
         let first_pane = TerminalPane::new(1, "Terminal 1");
         let first_id = tiles.insert_pane(first_pane);
         let root = tiles.insert_horizontal_tile(vec![first_id]);
-        let tree = Tree::new("terminator_workspace", root, tiles);
+        let tree = Tree::new("termin_workspace", root, tiles);
 
         Self {
             tree,

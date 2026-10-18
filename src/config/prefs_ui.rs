@@ -26,7 +26,8 @@ impl PreferencesWindow {
                 );
                 ui.add_space(8.0);
 
-                egui::Grid::new("prefs_color_grid")
+
+                egui::Grid::new("prefscolor_grid")
                     .num_columns(4)
                     .spacing([10.0, 8.0])
                     .striped(true)

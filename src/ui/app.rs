@@ -6,13 +6,13 @@ use crate::ui::workspace::Workspace;
 
 const RESIZE_CORNER_SIZE: f32 = 16.0;
 
-pub struct TerminechanApp {
+pub struct TerminApp {
     pub settings: ThemeSettings,
     pub workspace: Workspace,
     pub prefs_window: PreferencesWindow,
 }
 
-impl TerminechanApp {
+impl TerminApp {
     pub fn new(_cc: &eframe::CreationContext<'_>) -> Self {
         let settings = ThemeSettings::load();
         Self {
@@ -79,7 +79,7 @@ impl TerminechanApp {
     }
 }
 
-impl eframe::App for TerminechanApp {
+impl eframe::App for TerminApp {
     fn ui(&mut self, ui: &mut Ui, _frame: &mut Frame) {
         let ctx = ui.ctx().clone();
 

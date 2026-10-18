@@ -1,7 +1,9 @@
 use serde::{Deserialize, Serialize};
+use std::env;
 
 /// Serializable layout preset structure for saving and restoring workspace splits.
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[warn(dead_code)]
 pub enum LayoutNode {
     Pane {
         title: String,
@@ -15,10 +17,12 @@ pub enum LayoutNode {
     },
 }
 
+
+
 impl Default for LayoutNode {
     fn default() -> Self {
         Self::Pane {
-            title: "Terminal 1".to_string(),
+            title: env::var("SHELL").unwrap_or_else(|_| "Terminal 1".to_string()).to_string(),
             command: None,
         }
     }

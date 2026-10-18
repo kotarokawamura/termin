@@ -4,12 +4,12 @@ pub mod ui;
 mod vte;
 
 use eframe::egui;
-use ui::app::TerminechanApp;
+use ui::app::TerminApp;
 
 fn main() -> Result<(), eframe::Error> {
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_title("terminechan")
+            .with_title("termin")
             .with_decorations(false)
             .with_inner_size([1100.0, 720.0])
             .with_min_inner_size([400.0, 260.0]),
@@ -17,8 +17,8 @@ fn main() -> Result<(), eframe::Error> {
     };
 
     eframe::run_native(
-        "terminechan",
+        "termin",
         options,
-        Box::new(|cc| Ok(Box::new(TerminechanApp::new(cc)))),
+        Box::new(|cc| Ok(Box::new(TerminApp::new(cc)))),
     )
 }

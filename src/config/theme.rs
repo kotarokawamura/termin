@@ -33,7 +33,7 @@ impl Default for ThemeSettings {
 impl ThemeSettings {
     pub fn config_path() -> PathBuf {
         let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
-        PathBuf::from(home).join(".config/terminechan/config.json")
+        PathBuf::from(home).join(".config/termini/config.json")
     }
 
     pub fn load() -> Self {
