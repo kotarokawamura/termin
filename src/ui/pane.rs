@@ -14,8 +14,12 @@
 // along with this program; if not, write to the Free Software
 // Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
 use eframe::egui;
-//use egui::{KeyboardShortcut, Modifiers};
+use egui_tiles::TileId;
 use crate::config::theme::ThemeSettings;
+use crate::menus::{
+    MenuManager,
+    types::{MenuAction, MenuContext},
+};
 use crate::session::local_pty::LocalPtySession;
 use crate::session::SessionDriver;
 use crate::ui::titlebar::{render_titlebar, TitleBarAction};
@@ -69,6 +73,8 @@ impl TerminalPane {
     pub fn ui(
         &mut self,
         ui: &mut egui::Ui,
+        tile_id: TileId,
+        menus: &MenuManager,
         settings: &ThemeSettings,
         is_focused: bool,
         is_top_right: bool,
@@ -78,6 +84,8 @@ impl TerminalPane {
         // 1. Render Terminator-style titlebar
         let tb_out = render_titlebar(
             ui,
+            tile_id,
+            menus,
             &mut self.title,
             &mut self.editing_title,
             is_focused,
@@ -93,6 +101,35 @@ impl TerminalPane {
         let (rect, term_resp) = ui.allocate_exact_size(available, egui::Sense::click());
         if term_resp.clicked() {
             clicked_or_focused = true;
+        }
+
+        // 3. Context menu for the terminal screen canvas
+        let mut menu_action_output = None;
+        if let Some((_ctx, menu_action)) = menus.show(&term_resp, MenuContext::Pane(tile_id)) {
+            clicked_or_focused = true;
+            match menu_action {
+                MenuAction::Copy => {
+                    // Request copy operation
+                    ui.ctx().send_viewport_cmd(egui::ViewportCommand::RequestCopy);
+                }
+                MenuAction::Paste => {
+                    // Request paste operation from system clipboard
+                    ui.ctx().send_viewport_cmd(egui::ViewportCommand::RequestPaste);
+                }
+                MenuAction::SplitHorizontal => {
+                    menu_action_output = Some(TitleBarAction::SplitHorizontal);
+                }
+                MenuAction::SplitVertical => {
+                    menu_action_output = Some(TitleBarAction::SplitVertical);
+                }
+                MenuAction::ClosePane => {
+                    menu_action_output = Some(TitleBarAction::ClosePane);
+                }
+                MenuAction::OpenSettings => {
+                    menu_action_output = Some(TitleBarAction::OpenPreferences);
+                }
+                _ => {}
+            }
         }
 
         let painter = ui.painter_at(rect);
@@ -115,7 +152,6 @@ impl TerminalPane {
             self.handle_keyboard_input(ui);
         }
 
-        //
         let mut shortcut_key_action = None;
         if is_focused && !self.editing_title {
             shortcut_key_action = self.handle_shortcut_keyboard_input(ui);
@@ -179,17 +215,18 @@ impl TerminalPane {
                     cur_rect,
                     0.0,
                     egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(160, 160, 160)),
-                    egui::StrokeKind::Outside
+                    egui::StrokeKind::Outside,
                 );
             }
         }
 
         PaneUiOutput {
-            action: tb_out.action.or(shortcut_key_action),
+            action: tb_out.action.or(shortcut_key_action).or(menu_action_output),
             start_tile_drag: tb_out.start_tile_drag,
             clicked_or_focused,
         }
     }
+
     fn handle_keyboard_input(&mut self, ui: &mut egui::Ui) {
         let events = ui.input(|i| i.events.clone());
         for event in events {

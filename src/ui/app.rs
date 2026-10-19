@@ -17,6 +17,7 @@ use eframe::{egui, Frame};
 use egui::Ui;
 use crate::config::prefs_ui::PreferencesWindow;
 use crate::config::theme::ThemeSettings;
+use crate::menus::MenuManager;
 use crate::ui::workspace::Workspace;
 
 const RESIZE_CORNER_SIZE: f32 = 16.0;
@@ -25,6 +26,7 @@ pub struct TerminApp {
     pub settings: ThemeSettings,
     pub workspace: Workspace,
     pub prefs_window: PreferencesWindow,
+    pub menu_manager: MenuManager,
 }
 
 impl TerminApp {
@@ -34,6 +36,7 @@ impl TerminApp {
             settings,
             workspace: Workspace::new(),
             prefs_window: PreferencesWindow::default(),
+            menu_manager: MenuManager::new(),
         }
     }
 
@@ -103,7 +106,7 @@ impl eframe::App for TerminApp {
             ctx.request_repaint();
         }
 
-        //33FPS
+        // 33FPS
         ctx.request_repaint_after(std::time::Duration::from_millis(30));
 
         self.handle_custom_resize_frame(&ctx);
@@ -133,6 +136,7 @@ impl eframe::App for TerminApp {
                 ui,
                 &ctx,
                 &self.settings,
+                &self.menu_manager,
                 &mut self.prefs_window.open,
             );
         });

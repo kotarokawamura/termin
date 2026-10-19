@@ -17,9 +17,9 @@ use std::collections::HashMap;
 use eframe::egui;
 use egui_tiles::{Tile, TileId, Tiles, Tree, UiResponse};
 use crate::config::theme::ThemeSettings;
+use crate::menus::MenuManager;
 use crate::ui::pane::TerminalPane;
 use crate::ui::titlebar::TitleBarAction;
-use std::env;
 
 #[derive(Clone, Copy)]
 pub enum SplitAxis {
@@ -81,12 +81,14 @@ impl Workspace {
         ui: &mut egui::Ui,
         ctx: &egui::Context,
         settings: &ThemeSettings,
+        menus: &MenuManager,
         prefs_open: &mut bool,
     ) {
         self.recorded_rects.clear();
 
         let mut behavior = TreeBehavior {
             settings,
+            menus,
             focused_tile: &mut self.focused_tile,
             top_right_tile: self.top_right_tile,
             recorded_rects: &mut self.recorded_rects,
@@ -220,6 +222,7 @@ impl Workspace {
 
 struct TreeBehavior<'a> {
     settings: &'a ThemeSettings,
+    menus: &'a MenuManager,
     focused_tile: &'a mut Option<TileId>,
     top_right_tile: Option<TileId>,
     recorded_rects: &'a mut HashMap<TileId, egui::Rect>,
@@ -239,7 +242,14 @@ impl<'a> egui_tiles::Behavior<TerminalPane> for TreeBehavior<'a> {
         let is_focused = *self.focused_tile == Some(tile_id);
         let is_top_right = self.top_right_tile == Some(tile_id) || self.top_right_tile.is_none();
 
-        let output = pane.ui(ui, self.settings, is_focused, is_top_right);
+        let output = pane.ui(
+            ui,
+            tile_id,
+            self.menus,
+            self.settings,
+            is_focused,
+            is_top_right,
+        );
 
         if output.clicked_or_focused {
             *self.focused_tile = Some(tile_id);

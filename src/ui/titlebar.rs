@@ -14,7 +14,12 @@
 // along with this program; if not, write to the Free Software
 // Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
 use eframe::egui;
+use egui_tiles::TileId;
 use crate::config::theme::ThemeSettings;
+use crate::menus::{
+    MenuManager,
+    types::{MenuAction, MenuContext},
+};
 
 #[derive(Clone, Copy, Debug)]
 pub enum TitleBarAction {
@@ -35,6 +40,8 @@ pub struct TitleBarOutput {
 
 pub fn render_titlebar(
     ui: &mut egui::Ui,
+    tile_id: TileId,
+    menus: &MenuManager,
     title: &mut String,
     editing_title: &mut bool,
     is_active: bool,
@@ -126,7 +133,20 @@ pub fn render_titlebar(
         }
     });
 
-    // 4. Titlebar background interaction (Double-click = Maximize, Drag = Move Window)
+    // 4. Context menu for the titlebar area
+    if let Some((_ctx, menu_action)) = menus.show(&bar_resp, MenuContext::Titlebar(tile_id)) {
+        output.clicked = true;
+        match menu_action {
+            MenuAction::SplitHorizontal => output.action = Some(TitleBarAction::SplitHorizontal),
+            MenuAction::SplitVertical => output.action = Some(TitleBarAction::SplitVertical),
+            MenuAction::ClosePane => output.action = Some(TitleBarAction::ClosePane),
+            MenuAction::OpenSettings => output.action = Some(TitleBarAction::OpenPreferences),
+            MenuAction::ToggleFullscreen => output.action = Some(TitleBarAction::ToggleMaximizeWindow),
+            _ => {}
+        }
+    }
+
+    // 5. Titlebar background interaction (Double-click = Maximize, Drag = Move Window)
     if !*editing_title && !output.start_tile_drag && output.action.is_none() {
         if bar_resp.double_clicked() {
             output.action = Some(TitleBarAction::ToggleMaximizeWindow);

@@ -17,6 +17,7 @@ mod config;
 mod session;
 pub mod ui;
 mod vte;
+pub mod menus;
 
 use eframe::egui;
 use ui::app::TerminApp;
