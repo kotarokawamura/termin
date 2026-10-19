@@ -157,10 +157,17 @@ impl TerminalPane {
             shortcut_key_action = self.handle_shortcut_keyboard_input(ui);
         }
 
+        let term_font_size = settings.effective_terminal_font_size();
+        let char_w = (term_font_size * 0.6).max(4.0);
+        let char_h = (term_font_size * 1.15).max(8.0);
+        let pad = 4.0_f32;
+
+        // ... (resize check and keyboard input) ...
+
         // Draw cells
         let (rows, cols) = self.backend.size();
-        let font_id = egui::FontId::monospace(14.0);
-
+        let font_id = egui::FontId::monospace(term_font_size);
+        
         for r in 0..rows {
             for c in 0..cols {
                 let cell = self.backend.read_cell(r, c);

@@ -30,8 +30,11 @@ pub struct TerminApp {
 }
 
 impl TerminApp {
-    pub fn new(_cc: &eframe::CreationContext<'_>) -> Self {
+    pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
         let settings = ThemeSettings::load();
+        // Apply saved font family and sizes on startup
+        settings.apply_fonts(&cc.egui_ctx);
+
         Self {
             settings,
             workspace: Workspace::new(),

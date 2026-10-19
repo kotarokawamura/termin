@@ -14,11 +14,13 @@
 // along with this program; if not, write to the Free Software
 // Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
 use std::fs;
-use std::path::PathBuf;
-use eframe::egui::Color32;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use eframe::egui::{self, Color32, FontData, FontDefinitions, FontFamily, FontId, TextStyle};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default)]
 pub struct ThemeSettings {
     pub title_active_bg: String,
     pub title_active_fg: String,
@@ -28,6 +30,11 @@ pub struct ThemeSettings {
     pub frame_border_color: String,
     pub separator_color: String,
     pub frame_border_width: f32,
+
+    // Font configuration
+    pub font_path: String,
+    pub ui_font_size: f32,
+    pub terminal_font_size: f32,
 }
 
 impl Default for ThemeSettings {
@@ -41,6 +48,9 @@ impl Default for ThemeSettings {
             frame_border_color: "#5a5a5a".to_string(),
             separator_color: String::new(),
             frame_border_width: 5.0,
+            font_path: default_debian_font_path().unwrap_or_default(),
+            ui_font_size: 13.0,
+            terminal_font_size: 14.0,
         }
     }
 }
@@ -54,7 +64,10 @@ impl ThemeSettings {
     pub fn load() -> Self {
         let path = Self::config_path();
         if let Ok(content) = fs::read_to_string(path) {
-            if let Ok(parsed) = serde_json::from_str::<Self>(&content) {
+            if let Ok(mut parsed) = serde_json::from_str::<Self>(&content) {
+                if parsed.font_path.is_empty() {
+                    parsed.font_path = default_debian_font_path().unwrap_or_default();
+                }
                 return parsed;
             }
         }
@@ -69,6 +82,96 @@ impl ThemeSettings {
         if let Ok(json) = serde_json::to_string_pretty(self) {
             let _ = fs::write(path, json);
         }
+    }
+
+    /// Apply configured font file and UI font sizes to the egui Context.
+    pub fn apply_fonts(&self, ctx: &egui::Context) {
+        let mut fonts = FontDefinitions::default();
+
+        let target_path = if !self.font_path.trim().is_empty() {
+            Some(self.font_path.trim().to_string())
+        } else {
+            default_debian_font_path()
+        };
+
+        if let Some(path) = target_path {
+            if let Ok(bytes) = fs::read(&path) {
+                fonts.font_data.insert(
+                    "custom_font".to_owned(),
+                    Arc::new(FontData::from_owned(bytes)),
+                );
+
+                // Put custom font at the highest priority for both Proportional and Monospace
+                fonts
+                    .families
+                    .entry(FontFamily::Proportional)
+                    .or_default()
+                    .insert(0, "custom_font".to_owned());
+
+                fonts
+                    .families
+                    .entry(FontFamily::Monospace)
+                    .or_default()
+                    .insert(0, "custom_font".to_owned());
+            }
+        }
+
+        // Also register a Japanese fallback font on Debian if the primary font is ASCII-only
+        if let Some(fallback_path) = default_debian_cjk_fallback() {
+            if fallback_path != self.font_path {
+                if let Ok(bytes) = fs::read(&fallback_path) {
+                    fonts.font_data.insert(
+                        "cjk_fallback".to_owned(),
+                        Arc::new(FontData::from_owned(bytes)),
+                    );
+                    fonts
+                        .families
+                        .entry(FontFamily::Proportional)
+                        .or_default()
+                        .push("cjk_fallback".to_owned());
+                    fonts
+                        .families
+                        .entry(FontFamily::Monospace)
+                        .or_default()
+                        .push("cjk_fallback".to_owned());
+                }
+            }
+        }
+
+        ctx.set_fonts(fonts);
+
+        // Apply UI font size across standard text styles
+        let ui_size = self.effective_ui_font_size();
+        ctx.all_styles_mut(|style| {
+            style.text_styles.insert(
+                TextStyle::Body,
+                FontId::new(ui_size, FontFamily::Proportional),
+            );
+            style.text_styles.insert(
+                TextStyle::Button,
+                FontId::new(ui_size, FontFamily::Proportional),
+            );
+            style.text_styles.insert(
+                TextStyle::Monospace,
+                FontId::new(ui_size, FontFamily::Monospace),
+            );
+            style.text_styles.insert(
+                TextStyle::Small,
+                FontId::new((ui_size - 2.0).max(8.0), FontFamily::Proportional),
+            );
+            style.text_styles.insert(
+                TextStyle::Heading,
+                FontId::new(ui_size + 4.0, FontFamily::Proportional),
+            );
+        });
+    }
+
+    pub fn effective_ui_font_size(&self) -> f32 {
+        self.ui_font_size.clamp(8.0, 32.0)
+    }
+
+    pub fn effective_terminal_font_size(&self) -> f32 {
+        self.terminal_font_size.clamp(8.0, 48.0)
     }
 
     pub fn effective_border_width(&self) -> f32 {
@@ -101,6 +204,71 @@ impl ThemeSettings {
 
     pub fn separator_color(&self) -> Color32 {
         parse_color(&self.separator_color).unwrap_or(Color32::from_rgb(74, 74, 74))
+    }
+}
+
+/// Find a sensible default Japanese-capable font on Debian systems.
+fn default_debian_font_path() -> Option<String> {
+    default_debian_cjk_fallback()
+}
+
+fn default_debian_cjk_fallback() -> Option<String> {
+    let candidates = [
+        "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+        "/usr/share/fonts/opentype/noto/NotoSansMonoCJKjp-Regular.otf",
+        "/usr/share/fonts/truetype/fonts-japanese-gothic.ttf",
+        "/usr/share/fonts/truetype/vlgothic/VL-Gothic-regular.ttf",
+        "/usr/share/fonts/opentype/ipafont-gothic/ipag.ttf",
+        "/usr/share/fonts/truetype/ipafont-gothic/ipag.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf",
+    ];
+    for path in candidates {
+        if Path::new(path).exists() {
+            return Some(path.to_string());
+        }
+    }
+    None
+}
+
+/// Scan standard Debian font directories for available font files.
+pub fn discover_system_fonts() -> Vec<(String, String)> {
+    let mut dirs = vec![
+        PathBuf::from("/usr/share/fonts"),
+        PathBuf::from("/usr/local/share/fonts"),
+    ];
+    if let Ok(home) = std::env::var("HOME") {
+        dirs.push(PathBuf::from(&home).join(".local/share/fonts"));
+        dirs.push(PathBuf::from(&home).join(".fonts"));
+    }
+
+    let mut found = Vec::new();
+    for dir in dirs {
+        collect_fonts_recursive(&dir, &mut found);
+    }
+
+    found.sort_by(|a, b| a.0.to_lowercase().cmp(&b.0.to_lowercase()));
+    found.dedup_by(|a, b| a.1 == b.1);
+    found
+}
+
+fn collect_fonts_recursive(dir: &Path, out: &mut Vec<(String, String)>) {
+    let Ok(entries) = fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            collect_fonts_recursive(&path, out);
+        } else if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
+            let ext_lower = ext.to_ascii_lowercase();
+            if matches!(ext_lower.as_str(), "ttf" | "otf" | "ttc") {
+                if let (Some(name), Some(full_path)) =
+                    (path.file_name().and_then(|n| n.to_str()), path.to_str())
+                {
+                    out.push((name.to_string(), full_path.to_string()));
+                }
+            }
+        }
     }
 }
 
