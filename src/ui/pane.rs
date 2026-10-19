@@ -190,17 +190,36 @@ impl TerminalPane {
             clicked_or_focused,
         }
     }
-    fn handle_keyboard_input(&mut self, ui: &mut egui::Ui)  {
+    fn handle_keyboard_input(&mut self, ui: &mut egui::Ui) {
         let events = ui.input(|i| i.events.clone());
         for event in events {
             match event {
                 egui::Event::Text(text) => {
                     self.session.write_input(text.as_bytes());
                 }
+                // egui intercepts Ctrl+C as Event::Copy and Ctrl+X as Event::Cut
+                egui::Event::Copy => {
+                    self.session.write_input(&[0x03]); // Ctrl+C (0x03)
+                }
+                egui::Event::Cut => {
+                    self.session.write_input(&[0x18]); // Ctrl+X (0x18)
+                }
+                // egui intercepts Ctrl+V as Event::Paste
+                egui::Event::Paste(text) => {
+                    let shift = ui.input(|i| i.modifiers.shift);
+                    if shift {
+                        // Ctrl+Shift+V: Paste clipboard text into terminal
+                        self.session.write_input(text.as_bytes());
+                    } else {
+                        // Plain Ctrl+V: Send C-v (0x16, page down in Emacs)
+                        self.session.write_input(&[0x16]);
+                    }
+                }
                 _ => {}
             }
         }
     }
+
     fn handle_shortcut_keyboard_input(&mut self, ui: &mut egui::Ui) -> Option<TitleBarAction> {
         let mut action = None;
         let events = ui.input(|i| i.events.clone());
@@ -212,7 +231,6 @@ impl TerminalPane {
                     modifiers,
                     ..
                 } => {
-                    // Ctrl + Alt の組み合わせ判定
                     if modifiers.ctrl && modifiers.shift {
                         match key {
                             egui::Key::E => {
@@ -223,27 +241,28 @@ impl TerminalPane {
                             }
                             _ => {}
                         }
-
                     } else if modifiers.ctrl {
-                        match key {
-                            egui::Key::C => self.session.write_input(&[0x03]), // Ctrl+C (SIGINT)
-                            egui::Key::D => self.session.write_input(&[0x04]), // Ctrl+D (EOF)
-                            egui::Key::L => self.session.write_input(&[0x0c]), // Ctrl+L (Clear)
-                            egui::Key::A => self.session.write_input(&[0x01]), // Ctrl+A (行頭へ移動)
-                            egui::Key::B => self.session.write_input(&[0x02]), // Ctrl+B (1文字戻る)
-                            egui::Key::E => self.session.write_input(&[0x05]), // Ctrl+E (行末へ移動)
-                            egui::Key::F => self.session.write_input(&[0x06]), // Ctrl+F (1文字進む)
-                            egui::Key::H => self.session.write_input(&[0x08]), // Ctrl+H (バックスペース)
-                            egui::Key::J => self.session.write_input(&[0x0a]), // Ctrl+J (LF / 改行)
-                            egui::Key::K => self.session.write_input(&[0x0b]), // Ctrl+K (カーソル以降削除)
-                            egui::Key::N => self.session.write_input(&[0x0e]), // Ctrl+N (次の履歴)
-                            egui::Key::P => self.session.write_input(&[0x10]), // Ctrl+P (前の履歴)
-                            egui::Key::R => self.session.write_input(&[0x12]), // Ctrl+R (履歴検索)
-                            egui::Key::T => self.session.write_input(&[0x14]), // Ctrl+T (文字入れ替え)
-                            egui::Key::U => self.session.write_input(&[0x15]), // Ctrl+U (行頭まで削除)
-                            egui::Key::W => self.session.write_input(&[0x17]), // Ctrl+W (単語削除)
-                            egui::Key::Z => self.session.write_input(&[0x1a]), // Ctrl+Z (サスペンド)
-                            _ => {}
+                        // Generic Ctrl + A..Z handling (0x01..0x1A)
+                        let key_name = format!("{:?}", key);
+                        if key_name.len() == 1 {
+                            let ch = key_name.chars().next().unwrap();
+                            if ch.is_ascii_uppercase() {
+                                let ctrl_code = (ch as u8) & 0x1F;
+                                self.session.write_input(&[ctrl_code]);
+                            }
+                        } else {
+                            match key {
+                                egui::Key::Space => self.session.write_input(&[0x00]), // Ctrl+Space (Emacs mark)
+                                egui::Key::Slash => self.session.write_input(&[0x1f]), // Ctrl+/ (Emacs undo)
+                                _ => {}
+                            }
+                        }
+                    } else if modifiers.alt {
+                        // Alt (Meta) key support for Emacs (e.g., M-x sends ESC + x)
+                        let key_name = format!("{:?}", key);
+                        if key_name.len() == 1 {
+                            let ch = key_name.chars().next().unwrap().to_ascii_lowercase();
+                            self.session.write_input(&[0x1b, ch as u8]);
                         }
                     } else {
                         match key {

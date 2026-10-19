@@ -40,7 +40,11 @@ impl LocalPtySession {
 
         if let Ok(pair) = pair {
             let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/bash".to_string());
-            let cmd = CommandBuilder::new(shell);
+            let mut cmd = CommandBuilder::new(shell);
+
+            cmd.env("TERM", "xterm-256color"); 
+            cmd.env("COLORTERM", "truecolor");
+
             let child = pair.slave.spawn_command(cmd).ok();
             let writer = pair.master.take_writer().ok();
 
