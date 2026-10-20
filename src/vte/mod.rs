@@ -25,7 +25,10 @@ pub struct RenderableCell {
     pub fg: RgbColor,
     pub bg: RgbColor,
     pub bold: bool,
+    pub underline: bool,
     pub inverse: bool,
+    pub wide: bool,
+    pub wide_continuation: bool,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -43,4 +46,23 @@ pub trait TerminalBackend: Send {
     fn read_cell(&self, row: u16, col: u16) -> RenderableCell;
     fn size(&self) -> (u16, u16);
     fn cursor(&self) -> CursorState;
+
+    /// Adjust scrollback offset (positive = scroll up into history, negative = scroll down to live).
+    fn scroll(&mut self, _delta_rows: isize) {}
+
+    /// Current scrollback offset in rows (0 = viewing live bottom screen).
+    fn scroll_offset(&self) -> usize {
+        0
+    }
+
+    /// Maximum available scrollback offset in rows (total history lines above the live screen).
+    fn max_scroll_offset(&self) -> usize {
+        0
+    }
+
+    /// Set absolute scrollback offset in rows (0 = live bottom, max_scroll_offset = top of history).
+    fn set_scroll_offset(&mut self, _offset: usize) {}
+
+    /// Clear scrollback history buffer.
+    fn clear_scrollback(&mut self) {}
 }

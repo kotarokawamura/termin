@@ -14,10 +14,11 @@
 // along with this program; if not, write to the Free Software
 // Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
 mod config;
+pub mod i18n;
+pub mod menus;
 mod session;
 pub mod ui;
 mod vte;
-pub mod menus;
 
 use eframe::egui;
 use ui::app::TerminApp;

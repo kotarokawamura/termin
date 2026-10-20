@@ -54,9 +54,12 @@ pub enum MenuAction {
     SplitHorizontal,
     SplitVertical,
     ClosePane,
+    ClearScrollback,
 
-    // Titlebar用アクション
+    // Titlebar / Workspace用アクション
     NewTab,
+    SaveLayout,
+    LoadLayout,
     OpenSettings,
     ToggleFullscreen,
 

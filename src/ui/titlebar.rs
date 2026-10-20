@@ -16,12 +16,13 @@
 use eframe::egui;
 use egui_tiles::TileId;
 use crate::config::theme::ThemeSettings;
+use crate::i18n::tr;
 use crate::menus::{
     MenuManager,
     types::{MenuAction, MenuContext},
 };
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TitleBarAction {
     ClosePane,
     MinimizeWindow,
@@ -29,13 +30,23 @@ pub enum TitleBarAction {
     StartWindowMove,
     SplitHorizontal,
     SplitVertical,
+    NewTab,
+    FocusNextPane,
+    FocusPrevPane,
+    SaveLayout,
+    LoadLayout,
     OpenPreferences,
+    ZoomIn,
+    ZoomOut,
+    ZoomReset,
 }
 
 pub struct TitleBarOutput {
     pub action: Option<TitleBarAction>,
     pub start_tile_drag: bool,
     pub clicked: bool,
+    pub context_menu_open: bool,
+    pub is_dragging: bool,
 }
 
 pub fn render_titlebar(
@@ -52,16 +63,26 @@ pub fn render_titlebar(
         action: None,
         start_tile_drag: false,
         clicked: false,
+        context_menu_open: false,
+        is_dragging: false,
     };
-
-    let bg_color = settings.titlebar_bg(is_active);
-    let fg_color = settings.titlebar_fg(is_active);
 
     let bar_height = 24.0;
     let desired_size = egui::vec2(ui.available_width(), bar_height);
-    let (bar_rect, bar_resp) = ui.allocate_exact_size(desired_size, egui::Sense::click_and_drag());
+    let bar_sense = if *editing_title {
+        egui::Sense::hover()
+    } else {
+        egui::Sense::click_and_drag()
+    };
+    let (bar_rect, bar_resp) = ui.allocate_exact_size(desired_size, bar_sense);
 
-    ui.painter().rect_filled(bar_rect, 0.0, bg_color);
+    // Reserve background shape slot so we can color it after detecting any drag/menu state this frame
+    let bg_shape_idx = ui.painter().add(egui::Shape::Noop);
+
+    // Determine initial active state (may be downgraded to inactive if drag/context menu starts)
+    let initially_blocked =
+        egui::Popup::is_any_open(ui.ctx()) || ui.ctx().dragged_id().is_some();
+    let fg_color = settings.titlebar_fg(is_active && !initially_blocked);
 
     let mut child_ui = ui.new_child(
         egui::UiBuilder::new()
@@ -71,65 +92,180 @@ pub fn render_titlebar(
 
     child_ui.spacing_mut().item_spacing = egui::vec2(3.0, 0.0);
 
-    // 1. Left controls: Drag grip [ + ] for pane swap, plus split buttons
+    // 1. Left controls: Drag grip [ ✥ ] for pane swap, plus split/tab buttons
     let grip_btn = egui::Button::new(egui::RichText::new(" ✥ ").color(fg_color).size(12.0))
         .frame(false)
-        .sense(egui::Sense::drag());
+        .sense(egui::Sense::DRAG);
     let grip_resp = child_ui
         .add(grip_btn)
-        .on_hover_text("Drag and drop onto another pane to swap/split");
+        .on_hover_text(tr("Drag and drop onto another pane to swap/split"));
 
     if grip_resp.drag_started() {
         output.start_tile_drag = true;
+        output.is_dragging = true;
+        output.clicked = true;
+    } else if grip_resp.dragged() {
+        output.is_dragging = true;
     }
 
-    if small_bar_button(&mut child_ui, "[Split-H]", fg_color, "Split Horizontally (Left/Right)").clicked() {
+    if small_bar_button(
+        &mut child_ui,
+        &tr("[Split-H]"),
+        fg_color,
+        &tr("Split Horizontally (Left/Right)"),
+    )
+    .clicked()
+    {
         output.action = Some(TitleBarAction::SplitHorizontal);
+        output.clicked = true;
     }
-    if small_bar_button(&mut child_ui, "[Split-V]", fg_color, "Split Vertically (Top/Bottom)").clicked() {
+    if small_bar_button(
+        &mut child_ui,
+        &tr("[Split-V]"),
+        fg_color,
+        &tr("Split Vertically (Top/Bottom)"),
+    )
+    .clicked()
+    {
         output.action = Some(TitleBarAction::SplitVertical);
+        output.clicked = true;
+    }
+    if small_bar_button(
+        &mut child_ui,
+        &tr("[+Tab]"),
+        fg_color,
+        &tr("Add a new tab in this pane"),
+    )
+    .clicked()
+    {
+        output.action = Some(TitleBarAction::NewTab);
+        output.clicked = true;
     }
 
-    // 2. Title text or inline rename entry
-    if *editing_title {
-        let edit_resp = child_ui.add(
-            egui::TextEdit::singleline(title)
-                .desired_width(150.0)
-                .font(egui::TextStyle::Monospace),
-        );
-        if edit_resp.lost_focus() || child_ui.input(|i| i.key_pressed(egui::Key::Enter)) {
-            *editing_title = false;
-        } else {
-            edit_resp.request_focus();
-        }
-    } else {
-        child_ui.add(
-            egui::Label::new(egui::RichText::new(title.as_str()).color(fg_color).size(12.0))
-                .selectable(false),
-        );
-    }
+    let left_controls_right_x = child_ui.cursor().min.x;
 
-    // 3. Right-side controls: [Gear] [Edit] ([—] [🗖] if top-right) [×]
+    // 2. Right-side controls laid out before the middle title/TextEdit so button IDs & positions remain stable
+    let mut just_started_editing = false;
     child_ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-        if small_bar_button(ui, " × ", fg_color, "Close this pane").clicked() {
+        if small_bar_button(ui, " × ", fg_color, &tr("Close this pane")).clicked() {
             output.action = Some(TitleBarAction::ClosePane);
+            output.clicked = true;
         }
 
         if is_top_right {
-            if small_bar_button(ui, " 🗖 ", fg_color, "Maximize / Restore window").clicked() {
+            if small_bar_button(ui, " 🗖 ", fg_color, &tr("Maximize / Restore window")).clicked() {
                 output.action = Some(TitleBarAction::ToggleMaximizeWindow);
+                output.clicked = true;
             }
-            if small_bar_button(ui, " — ", fg_color, "Minimize window").clicked() {
+            if small_bar_button(ui, " — ", fg_color, &tr("Minimize window")).clicked() {
                 output.action = Some(TitleBarAction::MinimizeWindow);
+                output.clicked = true;
             }
         }
 
-        if small_bar_button(ui, " ✎ ", fg_color, "Rename pane title").clicked() {
+        let edit_btn_resp = small_bar_button(ui, " ✎ ", fg_color, &tr("Rename pane title"));
+        if edit_btn_resp.clicked() {
             *editing_title = !*editing_title;
+            if *editing_title {
+                just_started_editing = true;
+            }
+            output.clicked = true;
+        }
+        #[cfg(test)]
+        ui.ctx()
+            .data_mut(|d| d.insert_temp(egui::Id::new("edit_btn_rect"), edit_btn_resp.rect));
+
+        if small_bar_button(ui, " ⚙ ", fg_color, &tr("Open CustomDragBar Preferences")).clicked() {
+            output.action = Some(TitleBarAction::OpenPreferences);
+            output.clicked = true;
         }
 
-        if small_bar_button(ui, " ⚙ ", fg_color, "Open CustomDragBar Preferences").clicked() {
-            output.action = Some(TitleBarAction::OpenPreferences);
+        let right_controls_left_x = ui.cursor().max.x;
+
+        // 3. Title text or inline rename entry centered in the titlebar (clamped between left & right controls)
+        let avail_left = (left_controls_right_x + 4.0).min(bar_rect.max.x);
+        let avail_right = (right_controls_left_x - 4.0).max(avail_left);
+        let middle_rect = egui::Rect::from_min_max(
+            egui::pos2(avail_left, bar_rect.min.y + 1.0),
+            egui::pos2(avail_right, bar_rect.max.y - 1.0),
+        );
+
+        let edit_id = egui::Id::new(("pane_title_edit", tile_id));
+        if *editing_title {
+            let edit_w = middle_rect.width().min(180.0).max(40.0);
+            let ideal_min_x = (bar_rect.center().x - edit_w * 0.5).clamp(
+                middle_rect.min.x,
+                (middle_rect.max.x - edit_w).max(middle_rect.min.x),
+            );
+            let edit_rect = egui::Rect::from_min_size(
+                egui::pos2(ideal_min_x, middle_rect.min.y),
+                egui::vec2(edit_w, middle_rect.height()),
+            );
+            let mut edit_ui = ui.new_child(
+                egui::UiBuilder::new()
+                    .max_rect(edit_rect)
+                    .layout(egui::Layout::left_to_right(egui::Align::Center)),
+            );
+            let edit_resp = edit_ui.add(
+                egui::TextEdit::singleline(title)
+                    .id(edit_id)
+                    .desired_width(edit_w)
+                    .horizontal_align(egui::Align::Center)
+                    .font(egui::TextStyle::Monospace),
+            );
+            #[cfg(test)]
+            ui.ctx()
+                .data_mut(|d| d.insert_temp(egui::Id::new("edit_text_rect"), edit_resp.rect));
+
+            if just_started_editing || (!edit_resp.has_focus() && !edit_resp.lost_focus()) {
+                edit_resp.request_focus();
+            } else if edit_resp.lost_focus()
+                || ui.input(|i| {
+                    i.key_pressed(egui::Key::Enter) || i.key_pressed(egui::Key::Escape)
+                })
+            {
+                *editing_title = false;
+            }
+        } else {
+            let font_id = egui::FontId::proportional(12.0);
+            let galley = ui
+                .painter()
+                .layout_no_wrap(title.clone(), font_id, fg_color);
+            let label_w = (galley.size().x + 6.0).min(middle_rect.width()).max(16.0);
+            let ideal_min_x = (bar_rect.center().x - label_w * 0.5).clamp(
+                middle_rect.min.x,
+                (middle_rect.max.x - label_w).max(middle_rect.min.x),
+            );
+            let label_rect = egui::Rect::from_min_size(
+                egui::pos2(ideal_min_x, middle_rect.min.y),
+                egui::vec2(label_w, middle_rect.height()),
+            );
+            let mut label_ui = ui.new_child(
+                egui::UiBuilder::new()
+                    .max_rect(label_rect)
+                    .layout(egui::Layout::centered_and_justified(
+                        egui::Direction::LeftToRight,
+                    )),
+            );
+            let lbl_resp = label_ui.add(
+                egui::Label::new(
+                    egui::RichText::new(title.as_str())
+                        .color(fg_color)
+                        .size(12.0),
+                )
+                .truncate()
+                .sense(egui::Sense::CLICK)
+                .selectable(false),
+            );
+            #[cfg(test)]
+            ui.ctx()
+                .data_mut(|d| d.insert_temp(egui::Id::new("title_lbl_rect"), lbl_resp.rect));
+            if lbl_resp.double_clicked() {
+                *editing_title = true;
+                output.clicked = true;
+            } else if lbl_resp.clicked() {
+                output.clicked = true;
+            }
         }
     });
 
@@ -137,13 +273,22 @@ pub fn render_titlebar(
     if let Some((_ctx, menu_action)) = menus.show(&bar_resp, MenuContext::Titlebar(tile_id)) {
         output.clicked = true;
         match menu_action {
+            MenuAction::NewTab => output.action = Some(TitleBarAction::NewTab),
             MenuAction::SplitHorizontal => output.action = Some(TitleBarAction::SplitHorizontal),
             MenuAction::SplitVertical => output.action = Some(TitleBarAction::SplitVertical),
+            MenuAction::SaveLayout => output.action = Some(TitleBarAction::SaveLayout),
+            MenuAction::LoadLayout => output.action = Some(TitleBarAction::LoadLayout),
             MenuAction::ClosePane => output.action = Some(TitleBarAction::ClosePane),
             MenuAction::OpenSettings => output.action = Some(TitleBarAction::OpenPreferences),
-            MenuAction::ToggleFullscreen => output.action = Some(TitleBarAction::ToggleMaximizeWindow),
+            MenuAction::ToggleFullscreen => {
+                output.action = Some(TitleBarAction::ToggleMaximizeWindow)
+            }
             _ => {}
         }
+    }
+
+    if bar_resp.context_menu_opened() || egui::Popup::is_any_open(ui.ctx()) {
+        output.context_menu_open = true;
     }
 
     // 5. Titlebar background interaction (Double-click = Maximize, Drag = Move Window)
@@ -153,11 +298,25 @@ pub fn render_titlebar(
             output.clicked = true;
         } else if bar_resp.drag_started_by(egui::PointerButton::Primary) {
             output.action = Some(TitleBarAction::StartWindowMove);
+            output.is_dragging = true;
             output.clicked = true;
+        } else if bar_resp.dragged_by(egui::PointerButton::Primary) {
+            output.is_dragging = true;
         } else if bar_resp.clicked() {
             output.clicked = true;
         }
     }
+
+    if ui.ctx().dragged_id().is_some() {
+        output.is_dragging = true;
+    }
+
+    let effective_active = is_active && !output.context_menu_open && !output.is_dragging;
+    let bg_color = settings.titlebar_bg(effective_active);
+    ui.painter().set(
+        bg_shape_idx,
+        egui::Shape::rect_filled(bar_rect, 0.0, bg_color),
+    );
 
     output
 }
@@ -168,6 +327,158 @@ fn small_bar_button(
     fg_color: egui::Color32,
     tooltip: &str,
 ) -> egui::Response {
-    let btn = egui::Button::new(egui::RichText::new(label).color(fg_color).size(12.0)).frame(false);
+    let btn = egui::Button::new(egui::RichText::new(label).color(fg_color).size(12.0))
+        .frame(false)
+        .sense(egui::Sense::CLICK);
     ui.add(btn).on_hover_text(tooltip)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_titlebar_rename_button() {
+        let ctx = egui::Context::default();
+        let menus = MenuManager::new();
+        let settings = ThemeSettings::default();
+        settings.apply_fonts(&ctx);
+        let mut title = "/bin/bash".to_string();
+        let mut editing = false;
+        let tile_id = egui_tiles::TileId::from_u64(1);
+
+        let raw_with_screen = || {
+            let mut r = egui::RawInput::default();
+            r.screen_rect = Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(500.0, 400.0),
+            ));
+            r
+        };
+
+        // Frame 1: initial layout
+        ctx.run_ui(raw_with_screen(), |ui| {
+            render_titlebar(
+                ui,
+                tile_id,
+                &menus,
+                &mut title,
+                &mut editing,
+                true,
+                true,
+                &settings,
+            );
+        })
+        .textures_delta
+        .clear();
+
+        let lbl_rect: egui::Rect = ctx
+            .data(|d| d.get_temp(egui::Id::new("title_lbl_rect")))
+            .unwrap();
+        assert!(
+            (lbl_rect.center().x - 250.0).abs() < 2.0,
+            "Title label should be centered horizontally in the titlebar (got center x = {})",
+            lbl_rect.center().x
+        );
+
+        let btn_rect: egui::Rect = ctx
+            .data(|d| d.get_temp(egui::Id::new("edit_btn_rect")))
+            .unwrap();
+        let click_pos = btn_rect.center();
+
+        // Frame 2: press down on edit button
+        let mut press_input = raw_with_screen();
+        press_input.events.push(egui::Event::PointerMoved(click_pos));
+        press_input.events.push(egui::Event::PointerButton {
+            pos: click_pos,
+            button: egui::PointerButton::Primary,
+            pressed: true,
+            modifiers: egui::Modifiers::NONE,
+        });
+        ctx.run_ui(press_input, |ui| {
+            render_titlebar(
+                ui,
+                tile_id,
+                &menus,
+                &mut title,
+                &mut editing,
+                true,
+                true,
+                &settings,
+            );
+        })
+        .textures_delta
+        .clear();
+
+        // Frame 3: release on edit button -> enters editing mode on this exact frame!
+        let mut release_input = raw_with_screen();
+        release_input.events.push(egui::Event::PointerButton {
+            pos: click_pos,
+            button: egui::PointerButton::Primary,
+            pressed: false,
+            modifiers: egui::Modifiers::NONE,
+        });
+        ctx.run_ui(release_input, |ui| {
+            render_titlebar(
+                ui,
+                tile_id,
+                &menus,
+                &mut title,
+                &mut editing,
+                true,
+                true,
+                &settings,
+            );
+        })
+        .textures_delta
+        .clear();
+        assert!(editing, "Clicking pencil button should enable title editing");
+
+        // Frame 4: ArrowLeft navigation inside TextEdit must NOT lose focus
+        let mut arrow_input = raw_with_screen();
+        arrow_input.events.push(egui::Event::Key {
+            key: egui::Key::ArrowLeft,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        });
+        ctx.run_ui(arrow_input, |ui| {
+            render_titlebar(
+                ui,
+                tile_id,
+                &menus,
+                &mut title,
+                &mut editing,
+                true,
+                true,
+                &settings,
+            );
+        })
+        .textures_delta
+        .clear();
+        assert!(
+            editing,
+            "Pressing ArrowLeft inside title TextEdit must not lose focus"
+        );
+
+        // Frame 5: Type text into TextEdit
+        let mut type_input = raw_with_screen();
+        type_input.events.push(egui::Event::Text("-custom".to_string()));
+        ctx.run_ui(type_input, |ui| {
+            render_titlebar(
+                ui,
+                tile_id,
+                &menus,
+                &mut title,
+                &mut editing,
+                true,
+                true,
+                &settings,
+            );
+        })
+        .textures_delta
+        .clear();
+        assert!(title.contains("-custom"));
+    }
 }

@@ -17,26 +17,39 @@ use crate::vte::{CursorState, RenderableCell, RgbColor, TerminalBackend};
 
 const DEFAULT_FG: RgbColor = RgbColor(230, 230, 230);
 const DEFAULT_BG: RgbColor = RgbColor(18, 18, 18);
+const SCROLLBACK_LEN: usize = 5000;
 
 pub struct Vt100Adapter {
     parser: vt100::Parser,
     rows: u16,
     cols: u16,
+    max_scrollback: usize,
 }
 
 impl Vt100Adapter {
     pub fn new(rows: u16, cols: u16) -> Self {
         Self {
-            parser: vt100::Parser::new(rows, cols, 2000),
+            parser: vt100::Parser::new(rows, cols, SCROLLBACK_LEN),
             rows,
             cols,
+            max_scrollback: 0,
         }
+    }
+
+    fn refresh_max_scrollback(&mut self) {
+        let current = self.parser.screen().scrollback();
+        self.parser.screen_mut().set_scrollback(usize::MAX);
+        self.max_scrollback = self.parser.screen().scrollback();
+        self.parser
+            .screen_mut()
+            .set_scrollback(current.min(self.max_scrollback));
     }
 }
 
 impl TerminalBackend for Vt100Adapter {
     fn process_bytes(&mut self, bytes: &[u8]) {
         self.parser.process(bytes);
+        self.refresh_max_scrollback();
     }
 
     fn resize(&mut self, new_rows: u16, new_cols: u16) {
@@ -49,15 +62,24 @@ impl TerminalBackend for Vt100Adapter {
             self.rows = new_rows;
             self.cols = new_cols;
             self.parser.screen_mut().set_size(new_rows, new_cols);
+            self.refresh_max_scrollback();
             return;
         }
 
-        // 1. Extract logical lines (joining wrapped physical lines) from the current screen
-        let logical_lines = extract_logical_lines(self.parser.screen(), self.rows, self.cols);
+        let prev_scrollback = self.parser.screen().scrollback();
+        self.refresh_max_scrollback();
+
+        // 1. Extract logical lines (including scrollback history + live screen, joining wrapped rows)
+        let logical_lines = extract_all_logical_lines(
+            self.parser.screen_mut(),
+            self.rows,
+            self.cols,
+            self.max_scrollback,
+        );
 
         // 2. Create a new parser with the target dimensions and replay the logical lines
         //    so that vt100 automatically wraps them to the new column width
-        let mut new_parser = vt100::Parser::new(new_rows, new_cols, 2000);
+        let mut new_parser = vt100::Parser::new(new_rows, new_cols, SCROLLBACK_LEN);
         let mut buf = Vec::new();
 
         for (i, line) in logical_lines.iter().enumerate() {
@@ -72,18 +94,32 @@ impl TerminalBackend for Vt100Adapter {
         self.parser = new_parser;
         self.rows = new_rows;
         self.cols = new_cols;
+        self.refresh_max_scrollback();
+        if prev_scrollback > 0 {
+            self.parser
+                .screen_mut()
+                .set_scrollback(prev_scrollback.min(self.max_scrollback));
+        }
     }
 
     fn read_cell(&self, row: u16, col: u16) -> RenderableCell {
         let screen = self.parser.screen();
         if let Some(cell) = screen.cell(row, col) {
-            let ch = cell.contents().chars().next().unwrap_or(' ');
+            let wide_continuation = cell.is_wide_continuation();
+            let ch = if wide_continuation {
+                ' '
+            } else {
+                cell.contents().chars().next().unwrap_or(' ')
+            };
             RenderableCell {
                 ch,
                 fg: map_vt100_color(cell.fgcolor(), DEFAULT_FG),
                 bg: map_vt100_color(cell.bgcolor(), DEFAULT_BG),
                 bold: cell.bold(),
+                underline: cell.underline(),
                 inverse: cell.inverse(),
+                wide: cell.is_wide(),
+                wide_continuation,
             }
         } else {
             RenderableCell {
@@ -91,7 +127,10 @@ impl TerminalBackend for Vt100Adapter {
                 fg: DEFAULT_FG,
                 bg: DEFAULT_BG,
                 bold: false,
+                underline: false,
                 inverse: false,
+                wide: false,
+                wide_continuation: false,
             }
         }
     }
@@ -106,8 +145,50 @@ impl TerminalBackend for Vt100Adapter {
         CursorState {
             row,
             col,
-            visible: !screen.hide_cursor(),
+            visible: !screen.hide_cursor() && screen.scrollback() == 0,
         }
+    }
+
+    fn scroll(&mut self, delta_rows: isize) {
+        let current = self.parser.screen().scrollback();
+        let next = if delta_rows >= 0 {
+            current.saturating_add(delta_rows as usize)
+        } else {
+            current.saturating_sub((-delta_rows) as usize)
+        };
+        self.parser
+            .screen_mut()
+            .set_scrollback(next.min(self.max_scrollback));
+    }
+
+    fn scroll_offset(&self) -> usize {
+        self.parser.screen().scrollback()
+    }
+
+    fn max_scroll_offset(&self) -> usize {
+        self.max_scrollback
+    }
+
+    fn set_scroll_offset(&mut self, offset: usize) {
+        self.parser
+            .screen_mut()
+            .set_scrollback(offset.min(self.max_scrollback));
+    }
+
+    fn clear_scrollback(&mut self) {
+        self.parser.screen_mut().set_scrollback(0);
+        let logical_lines = extract_all_logical_lines(self.parser.screen_mut(), self.rows, self.cols, 0);
+        let mut new_parser = vt100::Parser::new(self.rows, self.cols, SCROLLBACK_LEN);
+        let mut buf = Vec::new();
+        for (i, line) in logical_lines.iter().enumerate() {
+            if i > 0 {
+                buf.extend_from_slice(b"\r\n");
+            }
+            serialize_cells_to_ansi(line, &mut buf);
+        }
+        new_parser.process(&buf);
+        self.parser = new_parser;
+        self.max_scrollback = 0;
     }
 }
 
@@ -117,19 +198,87 @@ struct SavedCell {
     fg: vt100::Color,
     bg: vt100::Color,
     bold: bool,
+    underline: bool,
     inverse: bool,
+    wide_continuation: bool,
 }
 
-/// Reads cells from the current screen and returns a list of logical lines
-/// by joining physical rows that were soft-wrapped at the right margin.
-fn extract_logical_lines(
+fn append_physical_row(
     screen: &vt100::Screen,
+    r: u16,
+    cols: u16,
+    preserve_up_to_col: Option<u16>,
+    current_line: &mut Vec<SavedCell>,
+    logical_lines: &mut Vec<Vec<SavedCell>>,
+) {
+    let mut row_cells = Vec::with_capacity(cols as usize);
+    for c in 0..cols {
+        if let Some(cell) = screen.cell(r, c) {
+            let is_cont = cell.is_wide_continuation();
+            let s = cell.contents();
+            row_cells.push(SavedCell {
+                contents: if is_cont {
+                    String::new()
+                } else if s.is_empty() {
+                    " ".to_string()
+                } else {
+                    s.to_string()
+                },
+                fg: cell.fgcolor(),
+                bg: cell.bgcolor(),
+                bold: cell.bold(),
+                underline: cell.underline(),
+                inverse: cell.inverse(),
+                wide_continuation: is_cont,
+            });
+        }
+    }
+
+    let is_wrapped = screen.row_wrapped(r);
+
+    if is_wrapped {
+        current_line.extend(row_cells.into_iter().filter(|c| !c.wide_continuation));
+    } else {
+        let mut end = row_cells.len();
+        while end > 0 {
+            let cell = &row_cells[end - 1];
+            let is_blank = !cell.wide_continuation
+                && cell.contents == " "
+                && cell.bg == vt100::Color::Default
+                && !cell.inverse;
+            if let Some(min_col) = preserve_up_to_col {
+                if (end as u16) <= min_col {
+                    break;
+                }
+            }
+            if is_blank {
+                end -= 1;
+            } else {
+                break;
+            }
+        }
+        current_line.extend(
+            row_cells
+                .into_iter()
+                .take(end)
+                .filter(|c| !c.wide_continuation),
+        );
+        logical_lines.push(std::mem::take(current_line));
+    }
+}
+
+/// Reads cells from scrollback history and the live screen, returning a list of logical lines
+/// by joining physical rows that were soft-wrapped at the right margin.
+fn extract_all_logical_lines(
+    screen: &mut vt100::Screen,
     rows: u16,
     cols: u16,
+    max_scrollback: usize,
 ) -> Vec<Vec<SavedCell>> {
+    screen.set_scrollback(0);
     let (cursor_row, cursor_col) = screen.cursor_position();
 
-    // Find the last row containing non-empty content
+    // Find the last row containing non-empty content on the live screen
     let mut last_active_row = cursor_row;
     for r in (0..rows).rev() {
         let has_content = (0..cols).any(|c| {
@@ -147,48 +296,35 @@ fn extract_logical_lines(
     let mut logical_lines: Vec<Vec<SavedCell>> = Vec::new();
     let mut current_line: Vec<SavedCell> = Vec::new();
 
+    // 1. Extract scrollback history rows from oldest (max_scrollback) to newest (1)
+    for offset in (1..=max_scrollback).rev() {
+        screen.set_scrollback(offset);
+        append_physical_row(
+            screen,
+            0,
+            cols,
+            None,
+            &mut current_line,
+            &mut logical_lines,
+        );
+    }
+
+    // 2. Extract live screen rows (0..=last_active_row)
+    screen.set_scrollback(0);
     for r in 0..=last_active_row {
-        let mut row_cells = Vec::with_capacity(cols as usize);
-        for c in 0..cols {
-            if let Some(cell) = screen.cell(r, c) {
-                let s = cell.contents();
-                row_cells.push(SavedCell {
-                    contents: if s.is_empty() { " ".to_string() } else { s.to_string() },
-                    fg: cell.fgcolor(),
-                    bg: cell.bgcolor(),
-                    bold: cell.bold(),
-                    inverse: cell.inverse(),
-                });
-            }
-        }
-
-        // Check whether this row was soft-wrapped at the right edge
-        let is_wrapped = screen.row_wrapped(r);
-
-        if is_wrapped {
-            // Keep trailing spaces on wrapped rows and concatenate with the next row
-            current_line.extend(row_cells);
+        let preserve_col = if r == cursor_row {
+            Some(cursor_col)
         } else {
-            // Trim trailing default-background spaces on hard-newline rows
-            let mut end = row_cells.len();
-            while end > 0 {
-                let cell = &row_cells[end - 1];
-                let is_blank = cell.contents == " "
-                    && cell.bg == vt100::Color::Default
-                    && !cell.inverse;
-                // Preserve spaces up to the cursor position on the active cursor row
-                if r == cursor_row && (end as u16) <= cursor_col {
-                    break;
-                }
-                if is_blank {
-                    end -= 1;
-                } else {
-                    break;
-                }
-            }
-            current_line.extend(row_cells.into_iter().take(end));
-            logical_lines.push(std::mem::take(&mut current_line));
-        }
+            None
+        };
+        append_physical_row(
+            screen,
+            r,
+            cols,
+            preserve_col,
+            &mut current_line,
+            &mut logical_lines,
+        );
     }
 
     if !current_line.is_empty() {
@@ -203,13 +339,25 @@ fn serialize_cells_to_ansi(cells: &[SavedCell], out: &mut Vec<u8>) {
     let mut cur_fg = vt100::Color::Default;
     let mut cur_bg = vt100::Color::Default;
     let mut cur_bold = false;
+    let mut cur_underline = false;
     let mut cur_inverse = false;
 
     for cell in cells {
-        if cell.fg != cur_fg || cell.bg != cur_bg || cell.bold != cur_bold || cell.inverse != cur_inverse {
+        if cell.wide_continuation {
+            continue;
+        }
+        if cell.fg != cur_fg
+            || cell.bg != cur_bg
+            || cell.bold != cur_bold
+            || cell.underline != cur_underline
+            || cell.inverse != cur_inverse
+        {
             out.extend_from_slice(b"\x1b[0");
             if cell.bold {
                 out.extend_from_slice(b";1");
+            }
+            if cell.underline {
+                out.extend_from_slice(b";4");
             }
             if cell.inverse {
                 out.extend_from_slice(b";7");
@@ -237,6 +385,7 @@ fn serialize_cells_to_ansi(cells: &[SavedCell], out: &mut Vec<u8>) {
             cur_fg = cell.fg;
             cur_bg = cell.bg;
             cur_bold = cell.bold;
+            cur_underline = cell.underline;
             cur_inverse = cell.inverse;
         }
         out.extend_from_slice(cell.contents.as_bytes());
@@ -245,6 +394,7 @@ fn serialize_cells_to_ansi(cells: &[SavedCell], out: &mut Vec<u8>) {
     if cur_fg != vt100::Color::Default
         || cur_bg != vt100::Color::Default
         || cur_bold
+        || cur_underline
         || cur_inverse
     {
         out.extend_from_slice(b"\x1b[0m");
@@ -259,8 +409,10 @@ fn map_vt100_color(c: vt100::Color, default_rgb: RgbColor) -> RgbColor {
     }
 }
 
+/// Converts a full 8-bit xterm-256color index (0..=255) into `RgbColor`.
 fn ansi_idx_to_rgb(idx: u8) -> RgbColor {
     match idx {
+        // 16 standard + bright ANSI colors
         0 => RgbColor(40, 44, 52),
         1 => RgbColor(224, 108, 117),
         2 => RgbColor(152, 195, 121),
@@ -276,6 +428,73 @@ fn ansi_idx_to_rgb(idx: u8) -> RgbColor {
         12 => RgbColor(117, 195, 255),
         13 => RgbColor(218, 140, 241),
         14 => RgbColor(106, 202, 214),
-        _ => RgbColor(255, 255, 255),
+        15 => RgbColor(255, 255, 255),
+        // 6x6x6 216-color cube (indices 16..=231)
+        16..=231 => {
+            let cube = idx - 16;
+            let r_idx = cube / 36;
+            let g_idx = (cube % 36) / 6;
+            let b_idx = cube % 6;
+            let to_val = |v: u8| if v == 0 { 0 } else { 55 + v * 40 };
+            RgbColor(to_val(r_idx), to_val(g_idx), to_val(b_idx))
+        }
+        // 24-step grayscale ramp (indices 232..=255)
+        232..=255 => {
+            let gray = 8 + (idx - 232) * 10;
+            RgbColor(gray, gray, gray)
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_ansi_256_color_mapping() {
+        assert_eq!(ansi_idx_to_rgb(15), RgbColor(255, 255, 255));
+        // Index 16 is (0, 0, 0) in the 6x6x6 cube
+        assert_eq!(ansi_idx_to_rgb(16), RgbColor(0, 0, 0));
+        // Index 196 is pure red (5, 0, 0) -> (255, 0, 0)
+        assert_eq!(ansi_idx_to_rgb(196), RgbColor(255, 0, 0));
+        // Index 232 is darkest grayscale (8, 8, 8)
+        assert_eq!(ansi_idx_to_rgb(232), RgbColor(8, 8, 8));
+        // Index 255 is lightest grayscale (238, 238, 238)
+        assert_eq!(ansi_idx_to_rgb(255), RgbColor(238, 238, 238));
+    }
+
+    #[test]
+    fn test_wide_char_resize_does_not_insert_extra_spaces() {
+        let mut adapter = Vt100Adapter::new(10, 40);
+        adapter.process_bytes("日本語テスト".as_bytes());
+        adapter.resize(10, 50);
+        adapter.resize(10, 40);
+
+        // "日" at col 0, continuation at col 1, "本" at col 2, continuation at col 3, "語" at col 4
+        assert_eq!(adapter.read_cell(0, 0).ch, '日');
+        assert!(adapter.read_cell(0, 1).wide_continuation);
+        assert_eq!(adapter.read_cell(0, 2).ch, '本');
+        assert!(adapter.read_cell(0, 3).wide_continuation);
+        assert_eq!(adapter.read_cell(0, 4).ch, '語');
+    }
+
+    #[test]
+    fn test_scrollback_preserved_across_resize() {
+        let mut adapter = Vt100Adapter::new(5, 40);
+        for i in 1..=20 {
+            adapter.process_bytes(format!("line {:02}\r\n", i).as_bytes());
+        }
+        assert!(adapter.max_scroll_offset() > 0);
+        let initial_max = adapter.max_scroll_offset();
+
+        // Resize (e.g. when zooming or splitting pane) must keep scrollback history
+        adapter.resize(5, 50);
+        assert_eq!(adapter.max_scroll_offset(), initial_max);
+
+        adapter.set_scroll_offset(initial_max);
+        assert_eq!(adapter.scroll_offset(), initial_max);
+        assert_eq!(adapter.read_cell(0, 0).ch, 'l');
+        assert_eq!(adapter.read_cell(0, 5).ch, '0');
+        assert_eq!(adapter.read_cell(0, 6).ch, '1');
     }
 }

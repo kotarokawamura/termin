@@ -28,6 +28,8 @@ pub struct MyCustomVte {
 #[allow(dead_code)]
 impl MyCustomVte {
     pub fn new(rows: u16, cols: u16) -> Self {
+        let rows = rows.max(1);
+        let cols = cols.max(1);
         Self {
             rows,
             cols,
@@ -38,9 +40,12 @@ impl MyCustomVte {
     }
 
     fn newline(&mut self) {
+        if self.rows == 0 {
+            return;
+        }
         if self.cursor_row + 1 < self.rows {
             self.cursor_row += 1;
-        } else {
+        } else if !self.grid.is_empty() {
             self.grid.remove(0);
             self.grid.push(vec![' '; self.cols as usize]);
         }
@@ -49,6 +54,9 @@ impl MyCustomVte {
 
 impl TerminalBackend for MyCustomVte {
     fn process_bytes(&mut self, bytes: &[u8]) {
+        if self.rows == 0 || self.cols == 0 {
+            return;
+        }
         let text = String::from_utf8_lossy(bytes);
         for ch in text.chars() {
             match ch {
@@ -64,7 +72,11 @@ impl TerminalBackend for MyCustomVte {
                         self.cursor_col = 0;
                         self.newline();
                     }
-                    self.grid[self.cursor_row as usize][self.cursor_col as usize] = c;
+                    if let Some(row) = self.grid.get_mut(self.cursor_row as usize) {
+                        if let Some(cell) = row.get_mut(self.cursor_col as usize) {
+                            *cell = c;
+                        }
+                    }
                     self.cursor_col += 1;
                 }
                 _ => {}
@@ -73,6 +85,8 @@ impl TerminalBackend for MyCustomVte {
     }
 
     fn resize(&mut self, rows: u16, cols: u16) {
+        let rows = rows.max(1);
+        let cols = cols.max(1);
         self.rows = rows;
         self.cols = cols;
         self.grid.resize(rows as usize, vec![' '; cols as usize]);
@@ -96,7 +110,10 @@ impl TerminalBackend for MyCustomVte {
             fg: RgbColor(230, 230, 230),
             bg: RgbColor(18, 18, 18),
             bold: false,
+            underline: false,
             inverse: false,
+            wide: false,
+            wide_continuation: false,
         }
     }
 

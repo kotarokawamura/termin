@@ -29,12 +29,17 @@ pub struct ThemeSettings {
     pub frame_bg_color: String,
     pub frame_border_color: String,
     pub separator_color: String,
+    pub separator_width: f32,
     pub frame_border_width: f32,
 
     // Font configuration
     pub font_path: String,
     pub ui_font_size: f32,
     pub terminal_font_size: f32,
+
+    // Internationalization (.po) configuration
+    pub language: String,
+    pub custom_po_path: String,
 }
 
 impl Default for ThemeSettings {
@@ -47,10 +52,13 @@ impl Default for ThemeSettings {
             frame_bg_color: "#2b2b2b".to_string(),
             frame_border_color: "#5a5a5a".to_string(),
             separator_color: String::new(),
+            separator_width: 2.0,
             frame_border_width: 5.0,
             font_path: default_debian_font_path().unwrap_or_default(),
             ui_font_size: 13.0,
             terminal_font_size: 14.0,
+            language: "auto".to_string(),
+            custom_po_path: String::new(),
         }
     }
 }
@@ -58,20 +66,33 @@ impl Default for ThemeSettings {
 impl ThemeSettings {
     pub fn config_path() -> PathBuf {
         let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
+        PathBuf::from(home).join(".config/termin/config.json")
+    }
+
+    fn legacy_config_path() -> PathBuf {
+        let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
         PathBuf::from(home).join(".config/termini/config.json")
     }
 
     pub fn load() -> Self {
         let path = Self::config_path();
-        if let Ok(content) = fs::read_to_string(path) {
+        let content = fs::read_to_string(&path)
+            .or_else(|_| fs::read_to_string(Self::legacy_config_path()));
+        if let Ok(content) = content {
             if let Ok(mut parsed) = serde_json::from_str::<Self>(&content) {
                 if parsed.font_path.is_empty() {
                     parsed.font_path = default_debian_font_path().unwrap_or_default();
                 }
+                if parsed.language.trim().is_empty() {
+                    parsed.language = "auto".to_string();
+                }
+                parsed.apply_language();
                 return parsed;
             }
         }
-        Self::default()
+        let default_settings = Self::default();
+        default_settings.apply_language();
+        default_settings
     }
 
     pub fn save(&self) {
@@ -82,6 +103,11 @@ impl ThemeSettings {
         if let Ok(json) = serde_json::to_string_pretty(self) {
             let _ = fs::write(path, json);
         }
+    }
+
+    /// Apply configured `.po` translation catalog.
+    pub fn apply_language(&self) {
+        crate::i18n::set_active_language(&self.language, &self.custom_po_path);
     }
 
     /// Apply configured font file and UI font sizes to the egui Context.
@@ -176,6 +202,10 @@ impl ThemeSettings {
 
     pub fn effective_border_width(&self) -> f32 {
         self.frame_border_width.clamp(1.0, 20.0)
+    }
+
+    pub fn effective_separator_width(&self) -> f32 {
+        self.separator_width.clamp(1.0, 16.0)
     }
 
     pub fn titlebar_bg(&self, is_active: bool) -> Color32 {

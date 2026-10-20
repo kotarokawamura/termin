@@ -27,7 +27,12 @@ pub struct LocalPtySession {
 }
 
 impl LocalPtySession {
+    #[allow(dead_code)]
     pub fn new(rows: u16, cols: u16) -> Self {
+        Self::new_with_command(rows, cols, None)
+    }
+
+    pub fn new_with_command(rows: u16, cols: u16, startup_command: Option<&str>) -> Self {
         let (tx, rx) = mpsc::channel();
         let pty_system = native_pty_system();
 
@@ -40,9 +45,15 @@ impl LocalPtySession {
 
         if let Ok(pair) = pair {
             let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/bash".to_string());
-            let mut cmd = CommandBuilder::new(shell);
+            let mut cmd = CommandBuilder::new(&shell);
+            if let Some(command_str) = startup_command {
+                if !command_str.trim().is_empty() {
+                    cmd.arg("-c");
+                    cmd.arg(command_str);
+                }
+            }
 
-            cmd.env("TERM", "xterm-256color"); 
+            cmd.env("TERM", "xterm-256color");
             cmd.env("COLORTERM", "truecolor");
 
             let child = pair.slave.spawn_command(cmd).ok();
@@ -74,6 +85,20 @@ impl LocalPtySession {
                 writer: None,
                 child: None,
                 rx,
+            }
+        }
+    }
+}
+
+impl Drop for LocalPtySession {
+    fn drop(&mut self) {
+        // Ensure child process is terminated and reaped when pane is closed
+        self.writer.take();
+        self.master.take();
+        if let Some(child) = &mut self.child {
+            if let Ok(None) = child.try_wait() {
+                let _ = child.kill();
+                let _ = child.wait();
             }
         }
     }
