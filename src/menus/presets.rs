@@ -13,14 +13,24 @@
 // You should have received a copy of the GNU General Public License
 // along with this program; if not, write to the Free Software
 // Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
+use crate::config::theme::ShortcutSettings;
 use crate::i18n::tr;
 use crate::menus::types::{MenuAction, MenuEntry, MenuTargetKind};
 
-pub fn default_entries_for(target: MenuTargetKind) -> Vec<MenuEntry> {
+fn opt_sc(s: &str) -> Option<&str> {
+    let trimmed = s.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed)
+    }
+}
+
+pub fn default_entries_for(target: MenuTargetKind, shortcuts: &ShortcutSettings) -> Vec<MenuEntry> {
     match target {
         MenuTargetKind::Pane => vec![
-            MenuEntry::item("📋", tr("Copy"), Some("Ctrl+Shift+C"), MenuAction::Copy),
-            MenuEntry::item("📥", tr("Paste"), Some("Ctrl+Shift+V"), MenuAction::Paste),
+            MenuEntry::item("📋", tr("Copy"), opt_sc(&shortcuts.copy), MenuAction::Copy),
+            MenuEntry::item("📥", tr("Paste"), opt_sc(&shortcuts.paste), MenuAction::Paste),
             MenuEntry::Separator,
             // ネストされたサブメニュー
             MenuEntry::submenu(
@@ -30,26 +40,26 @@ pub fn default_entries_for(target: MenuTargetKind) -> Vec<MenuEntry> {
                     MenuEntry::item(
                         "↔",
                         tr("Split Horizontally"),
-                        Some("Ctrl+Shift+E / Alt+D"),
+                        opt_sc(&shortcuts.split_horizontal),
                         MenuAction::SplitHorizontal,
                     ),
                     MenuEntry::item(
                         "↕",
                         tr("Split Vertically"),
-                        Some("Ctrl+Shift+O / Alt+Shift+D"),
+                        opt_sc(&shortcuts.split_vertical),
                         MenuAction::SplitVertical,
                     ),
                 ],
             ),
-            MenuEntry::item("➕", tr("New Tab"), Some("Ctrl+Shift+T"), MenuAction::NewTab),
+            MenuEntry::item("➕", tr("New Tab"), opt_sc(&shortcuts.new_tab), MenuAction::NewTab),
             MenuEntry::item("🧹", tr("Clear Scrollback"), None, MenuAction::ClearScrollback),
             MenuEntry::Separator,
-            MenuEntry::item("⚙", tr("Open Settings"), Some("Ctrl+,"), MenuAction::OpenSettings),
-            MenuEntry::item("✖", tr("Close Pane"), Some("Ctrl+Shift+W"), MenuAction::ClosePane),
+            MenuEntry::item("⚙", tr("Open Settings"), opt_sc(&shortcuts.open_preferences), MenuAction::OpenSettings),
+            MenuEntry::item("✖", tr("Close Pane"), opt_sc(&shortcuts.close_pane), MenuAction::ClosePane),
         ],
 
         MenuTargetKind::Titlebar => vec![
-            MenuEntry::item("➕", tr("New Tab"), Some("Ctrl+Shift+T"), MenuAction::NewTab),
+            MenuEntry::item("➕", tr("New Tab"), opt_sc(&shortcuts.new_tab), MenuAction::NewTab),
             MenuEntry::submenu(
                 "🪟",
                 tr("Split Pane"),
@@ -57,13 +67,13 @@ pub fn default_entries_for(target: MenuTargetKind) -> Vec<MenuEntry> {
                     MenuEntry::item(
                         "↔",
                         tr("Split Horizontally"),
-                        Some("Ctrl+Shift+E"),
+                        opt_sc(&shortcuts.split_horizontal),
                         MenuAction::SplitHorizontal,
                     ),
                     MenuEntry::item(
                         "↕",
                         tr("Split Vertically"),
-                        Some("Ctrl+Shift+O"),
+                        opt_sc(&shortcuts.split_vertical),
                         MenuAction::SplitVertical,
                     ),
                 ],
@@ -80,12 +90,12 @@ pub fn default_entries_for(target: MenuTargetKind) -> Vec<MenuEntry> {
             MenuEntry::item(
                 "⛶",
                 tr("Toggle Fullscreen"),
-                Some("F11"),
+                opt_sc(&shortcuts.toggle_fullscreen),
                 MenuAction::ToggleFullscreen,
             ),
-            MenuEntry::item("⚙", tr("Open Settings"), Some("Ctrl+,"), MenuAction::OpenSettings),
+            MenuEntry::item("⚙", tr("Open Settings"), opt_sc(&shortcuts.open_preferences), MenuAction::OpenSettings),
             MenuEntry::Separator,
-            MenuEntry::item("✖", tr("Close Pane"), Some("Ctrl+Shift+W"), MenuAction::ClosePane),
+            MenuEntry::item("✖", tr("Close Pane"), opt_sc(&shortcuts.close_pane), MenuAction::ClosePane),
         ],
     }
 }

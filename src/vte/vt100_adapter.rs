@@ -13,7 +13,7 @@
 // You should have received a copy of the GNU General Public License
 // along with this program; if not, write to the Free Software
 // Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
-use crate::vte::{CursorState, RenderableCell, RgbColor, TerminalBackend};
+use crate::vte::{CursorState, RenderableCell, RgbColor};
 
 const DEFAULT_FG: RgbColor = RgbColor(230, 230, 230);
 const DEFAULT_BG: RgbColor = RgbColor(18, 18, 18);
@@ -44,15 +44,17 @@ impl Vt100Adapter {
             .screen_mut()
             .set_scrollback(current.min(self.max_scrollback));
     }
-}
 
-impl TerminalBackend for Vt100Adapter {
-    fn process_bytes(&mut self, bytes: &[u8]) {
+    pub fn process_bytes(&mut self, bytes: &[u8]) {
         self.parser.process(bytes);
         self.refresh_max_scrollback();
     }
 
-    fn resize(&mut self, new_rows: u16, new_cols: u16) {
+    pub fn feed_bytes(&mut self, bytes: &[u8]) {
+        self.process_bytes(bytes);
+    }
+
+    pub fn resize(&mut self, new_rows: u16, new_cols: u16) {
         if self.rows == new_rows && self.cols == new_cols {
             return;
         }
@@ -102,7 +104,7 @@ impl TerminalBackend for Vt100Adapter {
         }
     }
 
-    fn read_cell(&self, row: u16, col: u16) -> RenderableCell {
+    pub fn read_cell(&self, row: u16, col: u16) -> RenderableCell {
         let screen = self.parser.screen();
         if let Some(cell) = screen.cell(row, col) {
             let wide_continuation = cell.is_wide_continuation();
@@ -135,11 +137,11 @@ impl TerminalBackend for Vt100Adapter {
         }
     }
 
-    fn size(&self) -> (u16, u16) {
+    pub fn size(&self) -> (u16, u16) {
         (self.rows, self.cols)
     }
 
-    fn cursor(&self) -> CursorState {
+    pub fn cursor(&self) -> CursorState {
         let screen = self.parser.screen();
         let (row, col) = screen.cursor_position();
         CursorState {
@@ -149,7 +151,7 @@ impl TerminalBackend for Vt100Adapter {
         }
     }
 
-    fn scroll(&mut self, delta_rows: isize) {
+    pub fn scroll(&mut self, delta_rows: isize) {
         let current = self.parser.screen().scrollback();
         let next = if delta_rows >= 0 {
             current.saturating_add(delta_rows as usize)
@@ -161,21 +163,21 @@ impl TerminalBackend for Vt100Adapter {
             .set_scrollback(next.min(self.max_scrollback));
     }
 
-    fn scroll_offset(&self) -> usize {
+    pub fn scroll_offset(&self) -> usize {
         self.parser.screen().scrollback()
     }
 
-    fn max_scroll_offset(&self) -> usize {
+    pub fn max_scroll_offset(&self) -> usize {
         self.max_scrollback
     }
 
-    fn set_scroll_offset(&mut self, offset: usize) {
+    pub fn set_scroll_offset(&mut self, offset: usize) {
         self.parser
             .screen_mut()
             .set_scrollback(offset.min(self.max_scrollback));
     }
 
-    fn clear_scrollback(&mut self) {
+    pub fn clear_scrollback(&mut self) {
         self.parser.screen_mut().set_scrollback(0);
         let logical_lines = extract_all_logical_lines(self.parser.screen_mut(), self.rows, self.cols, 0);
         let mut new_parser = vt100::Parser::new(self.rows, self.cols, SCROLLBACK_LEN);

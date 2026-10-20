@@ -77,6 +77,7 @@ impl Workspace {
         needs_repaint
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn ui(
         &mut self,
         ui: &mut egui::Ui,
@@ -84,17 +85,21 @@ impl Workspace {
         settings: &mut ThemeSettings,
         menus: &MenuManager,
         prefs_open: &mut bool,
+        other_screen_open: bool,
+        prefs_capturing_pointer: bool,
+        prefs_dragging: bool,
         external_zoom_delta: f32,
     ) {
         self.recorded_rects.clear();
 
+        let window_focused = ui.input(|i| i.focused);
+        let popup_open = egui::Popup::is_any_open(ctx);
         let any_editing_title = self
             .tree
             .tiles
             .iter()
             .any(|(_, tile)| matches!(tile, Tile::Pane(p) if p.editing_title));
-        let workspace_dragging =
-            self.tree.dragged_id(ctx).is_some() || ctx.dragged_id().is_some();
+        let workspace_dragging = self.tree.dragged_id(ctx).is_some() || prefs_dragging;
 
         let mut behavior = TreeBehavior {
             settings,
@@ -104,6 +109,10 @@ impl Workspace {
             recorded_rects: &mut self.recorded_rects,
             pending_action: None,
             prefs_open,
+            other_screen_open,
+            prefs_capturing_pointer,
+            popup_open,
+            window_focused,
             any_editing_title,
             workspace_dragging,
             external_zoom_delta,
@@ -385,6 +394,10 @@ struct TreeBehavior<'a> {
     recorded_rects: &'a mut HashMap<TileId, egui::Rect>,
     pending_action: Option<(TileId, TitleBarAction)>,
     prefs_open: &'a mut bool,
+    other_screen_open: bool,
+    prefs_capturing_pointer: bool,
+    popup_open: bool,
+    window_focused: bool,
     any_editing_title: bool,
     workspace_dragging: bool,
     external_zoom_delta: f32,
@@ -409,33 +422,53 @@ impl<'a> egui_tiles::Behavior<TerminalPane> for TreeBehavior<'a> {
             self.settings,
             is_focused,
             is_top_right,
-            *self.prefs_open,
+            self.other_screen_open,
+            self.prefs_capturing_pointer,
             self.any_editing_title,
             self.workspace_dragging,
             self.external_zoom_delta,
         );
 
-        if output.clicked_or_focused {
-            *self.focused_tile = Some(tile_id);
-        }
+        if !self.other_screen_open && !self.prefs_capturing_pointer {
+            if output.clicked_or_focused {
+                *self.focused_tile = Some(tile_id);
+            }
 
-        if let Some(action) = output.action {
-            if matches!(action, TitleBarAction::OpenPreferences) {
-                *self.prefs_open = true;
-            } else {
-                self.pending_action = Some((tile_id, action));
+            if let Some(action) = output.action {
+                if matches!(action, TitleBarAction::OpenPreferences) {
+                    *self.prefs_open = true;
+                } else {
+                    self.pending_action = Some((tile_id, action));
+                }
+            }
+
+            if output.start_tile_drag && is_focused && self.window_focused && !self.popup_open {
+                return UiResponse::DragStarted;
             }
         }
 
-        if output.start_tile_drag {
-            UiResponse::DragStarted
-        } else {
-            UiResponse::None
-        }
+        UiResponse::None
     }
 
     fn tab_title_for_pane(&mut self, pane: &TerminalPane) -> egui::WidgetText {
         pane.title.clone().into()
+    }
+
+    fn is_tile_draggable(&self, _tiles: &Tiles<TerminalPane>, tile_id: TileId) -> bool {
+        !self.other_screen_open
+            && !self.popup_open
+            && !self.prefs_capturing_pointer
+            && !self.any_editing_title
+            && self.window_focused
+            && *self.focused_tile == Some(tile_id)
+    }
+
+    fn is_container_resizable(&self, _tiles: &Tiles<TerminalPane>, _tile_id: TileId) -> bool {
+        !self.other_screen_open
+            && !self.popup_open
+            && !self.prefs_capturing_pointer
+            && !self.any_editing_title
+            && self.window_focused
     }
 
     fn gap_width(&self, _style: &egui::Style) -> f32 {

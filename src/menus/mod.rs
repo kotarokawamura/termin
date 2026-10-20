@@ -19,6 +19,7 @@ pub mod types;
 
 use std::collections::HashMap;
 use egui::Response;
+use crate::config::theme::ShortcutSettings;
 use types::{MenuAction, MenuContext, MenuEntry, MenuTargetKind};
 
 #[derive(Default)]
@@ -41,9 +42,14 @@ impl MenuManager {
     }
 
     /// 【各UI部品用API】指定したコンテキストに応じた右クリックメニューを表示する
-    pub fn show(&self, response: &Response, ctx: MenuContext) -> Option<(MenuContext, MenuAction)> {
+    pub fn show(
+        &self,
+        response: &Response,
+        ctx: MenuContext,
+        shortcuts: &ShortcutSettings,
+    ) -> Option<(MenuContext, MenuAction)> {
         let kind = ctx.kind();
-        let mut entries = presets::default_entries_for(kind);
+        let mut entries = presets::default_entries_for(kind, shortcuts);
 
         // プラグインから登録されたメニューがあれば末尾に追加
         if let Some(extra) = self.plugin_entries.get(&kind) {

@@ -13,8 +13,9 @@
 // You should have received a copy of the GNU General Public License
 // along with this program; if not, write to the Free Software
 // Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
-pub mod my_custom_vte;
 pub mod vt100_adapter;
+
+pub use vt100_adapter::Vt100Adapter;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct RgbColor(pub u8, pub u8, pub u8);
@@ -38,31 +39,3 @@ pub struct CursorState {
     pub visible: bool,
 }
 
-/// Abstract VTE engine boundary.
-/// Swap between `Vt100Adapter`, `MyCustomVte`, or `alacritty_terminal` without touching UI code.
-pub trait TerminalBackend: Send {
-    fn process_bytes(&mut self, bytes: &[u8]);
-    fn resize(&mut self, rows: u16, cols: u16);
-    fn read_cell(&self, row: u16, col: u16) -> RenderableCell;
-    fn size(&self) -> (u16, u16);
-    fn cursor(&self) -> CursorState;
-
-    /// Adjust scrollback offset (positive = scroll up into history, negative = scroll down to live).
-    fn scroll(&mut self, _delta_rows: isize) {}
-
-    /// Current scrollback offset in rows (0 = viewing live bottom screen).
-    fn scroll_offset(&self) -> usize {
-        0
-    }
-
-    /// Maximum available scrollback offset in rows (total history lines above the live screen).
-    fn max_scroll_offset(&self) -> usize {
-        0
-    }
-
-    /// Set absolute scrollback offset in rows (0 = live bottom, max_scroll_offset = top of history).
-    fn set_scroll_offset(&mut self, _offset: usize) {}
-
-    /// Clear scrollback history buffer.
-    fn clear_scrollback(&mut self) {}
-}

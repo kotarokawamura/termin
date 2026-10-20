@@ -18,8 +18,11 @@ use egui::Ui;
 use raw_window_handle::{HasWindowHandle as _, RawWindowHandle};
 use x11rb::connection::{Connection as _, RequestConnection as _};
 use x11rb::protocol::xinput::{self, ConnectionExt as _};
-use x11rb::protocol::xproto::ConnectionExt as _;
+use x11rb::protocol::xproto::{
+    AtomEnum, ClientMessageEvent, ConnectionExt as _, EventMask, InputFocus, MapState, PropMode,
+};
 use x11rb::rust_connection::RustConnection;
+use x11rb::wrapper::ConnectionExt as _;
 use crate::config::prefs_ui::PreferencesWindow;
 use crate::config::theme::ThemeSettings;
 use crate::menus::MenuManager;
@@ -29,6 +32,10 @@ const RESIZE_CORNER_SIZE: f32 = 16.0;
 
 struct X11PinchListener {
     conn: RustConnection,
+    xwindow: u32,
+    root: u32,
+    net_active_window_atom: u32,
+    startup_focus_remaining: u8,
     last_scale: f32,
 }
 
@@ -59,19 +66,86 @@ impl X11PinchListener {
         }];
 
         conn.xinput_xi_select_events(xwindow, &event_masks).ok()?;
+        let mut root = 0;
         if let Ok(cookie) = conn.query_tree(xwindow) {
             if let Ok(tree) = cookie.reply() {
+                root = tree.root;
                 for &child in &tree.children {
                     let _ = conn.xinput_xi_select_events(child, &event_masks);
                 }
             }
         }
+
+        // Ensure WM_HINTS declares InputHint = True (1) so X11 window managers give
+        // keyboard focus to this borderless window upon startup.
+        let wm_hints: [u32; 9] = [1u32 | 2u32, 1, 1, 0, 0, 0, 0, 0, 0];
+        let _ = conn.change_property32(
+            PropMode::REPLACE,
+            xwindow,
+            AtomEnum::WM_HINTS,
+            AtomEnum::WM_HINTS,
+            &wm_hints,
+        );
+
+        let net_active_window_atom = conn
+            .intern_atom(false, b"_NET_ACTIVE_WINDOW")
+            .ok()
+            .and_then(|c| c.reply().ok())
+            .map(|r| r.atom)
+            .unwrap_or(0);
+
         conn.flush().ok()?;
 
         Some(Self {
             conn,
+            xwindow,
+            root,
+            net_active_window_atom,
+            startup_focus_remaining: 15,
             last_scale: 1.0,
         })
+    }
+
+    /// Ensure the X11 window actually receives OS keyboard input focus on startup
+    /// once it transitions to `MapState::VIEWABLE`.
+    fn ensure_startup_focus(&mut self, egui_focused: bool) {
+        if self.startup_focus_remaining == 0 {
+            return;
+        }
+        if egui_focused {
+            self.startup_focus_remaining = 0;
+            return;
+        }
+        let viewable = self
+            .conn
+            .get_window_attributes(self.xwindow)
+            .ok()
+            .and_then(|c| c.reply().ok())
+            .is_some_and(|attrs| attrs.map_state == MapState::VIEWABLE);
+        if !viewable {
+            return;
+        }
+        self.startup_focus_remaining = self.startup_focus_remaining.saturating_sub(1);
+        if self.net_active_window_atom != 0 && self.root != 0 {
+            let ev = ClientMessageEvent::new(
+                32,
+                self.xwindow,
+                self.net_active_window_atom,
+                [2u32, x11rb::CURRENT_TIME, 0, 0, 0],
+            );
+            let _ = self.conn.send_event(
+                false,
+                self.root,
+                EventMask::SUBSTRUCTURE_REDIRECT | EventMask::SUBSTRUCTURE_NOTIFY,
+                ev,
+            );
+        }
+        let _ = self.conn.set_input_focus(
+            InputFocus::PARENT,
+            self.xwindow,
+            x11rb::CURRENT_TIME,
+        );
+        let _ = self.conn.flush();
     }
 
     fn poll_zoom_delta(&mut self) -> f32 {
@@ -106,6 +180,7 @@ pub struct TerminApp {
     pub menu_manager: MenuManager,
     x11_pinch_listener: Option<X11PinchListener>,
     x11_pinch_init_attempted: bool,
+    startup_focus_frames: u8,
 }
 
 impl TerminApp {
@@ -115,6 +190,9 @@ impl TerminApp {
         cc.egui_ctx.options_mut(|o| o.zoom_with_keyboard = false);
         // Apply saved font family and sizes on startup
         settings.apply_fonts(&cc.egui_ctx);
+        // Request OS window focus on startup so the initial active pane receives keyboard input immediately
+        cc.egui_ctx
+            .send_viewport_cmd(egui::ViewportCommand::Focus);
 
         let x11_pinch_listener = cc
             .window_handle()
@@ -129,11 +207,18 @@ impl TerminApp {
             menu_manager: MenuManager::new(),
             x11_pinch_listener,
             x11_pinch_init_attempted,
+            startup_focus_frames: 10,
         }
     }
 
     /// Handle custom borderless window edge and corner resizing.
     fn handle_custom_resize_frame(&self, ctx: &egui::Context) {
+        if self.prefs_window.any_open()
+            || egui::Popup::is_any_open(ctx)
+            || !ctx.input(|i| i.focused)
+        {
+            return;
+        }
         let is_maximized = ctx.input(|i| i.viewport().maximized.unwrap_or(false));
         if is_maximized {
             return;
@@ -200,10 +285,24 @@ impl eframe::App for TerminApp {
             }
         }
 
+        let window_focused = ctx.input(|i| i.focused);
+        if self.startup_focus_frames > 0 {
+            if window_focused {
+                self.startup_focus_frames = 0;
+            } else {
+                self.startup_focus_frames -= 1;
+                ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+                ctx.request_repaint();
+            }
+        }
+
         let external_zoom_delta = self
             .x11_pinch_listener
             .as_mut()
-            .map(|l| l.poll_zoom_delta())
+            .map(|l| {
+                l.ensure_startup_focus(window_focused);
+                l.poll_zoom_delta()
+            })
             .unwrap_or(1.0);
         if (external_zoom_delta - 1.0).abs() > 0.001 {
             ctx.request_repaint();
@@ -225,6 +324,7 @@ impl eframe::App for TerminApp {
         });
 
         // Preferences modal / floating window rendered before workspace so wants_keyboard_input is accurate
+        let prefs_was_open = self.prefs_window.any_open();
         self.prefs_window.ui(&ctx, &mut self.settings);
         if self.prefs_window.save_layout_requested {
             self.prefs_window.save_layout_requested = false;
@@ -250,6 +350,10 @@ impl eframe::App for TerminApp {
                 self.settings.frame_border_color(),
             ));
 
+        let other_screen_open = prefs_was_open || self.prefs_window.any_open();
+        let prefs_capturing_pointer = self.prefs_window.is_capturing_pointer(&ctx);
+        let prefs_dragging = self.prefs_window.subwindow_dragging;
+
         egui::CentralPanel::default().frame(panel_frame).show(ui, |ui: &mut Ui| {
             self.workspace.ui(
                 ui,
@@ -257,6 +361,9 @@ impl eframe::App for TerminApp {
                 &mut self.settings,
                 &self.menu_manager,
                 &mut self.prefs_window.open,
+                other_screen_open,
+                prefs_capturing_pointer,
+                prefs_dragging,
                 external_zoom_delta,
             );
         });

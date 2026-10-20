@@ -28,6 +28,7 @@ fn main() -> Result<(), eframe::Error> {
         viewport: egui::ViewportBuilder::default()
             .with_title("termin")
             .with_decorations(false)
+            .with_active(true)
             .with_inner_size([1100.0, 720.0])
             .with_min_inner_size([400.0, 260.0]),
         ..Default::default()

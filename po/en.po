@@ -1,0 +1,295 @@
+# English translation catalog for termin.
+# Copyright (C) 2026 kotaro, termin
+# This file is distributed under the same license as the termin package (GPL-2.0).
+#
+msgid ""
+msgstr ""
+"Project-Id-Version: termin 0.1.0\n"
+"POT-Creation-Date: 2026-10-20 20:00+0900\n"
+"PO-Revision-Date: 2026-10-20 20:00+0900\n"
+"Language: en\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Plural-Forms: nplurals=2; plural=(n != 1);\n"
+
+msgid "Copy"
+msgstr "Copy"
+
+msgid "Paste"
+msgstr "Paste"
+
+msgid "Split Pane"
+msgstr "Split Pane"
+
+msgid "Split Horizontally"
+msgstr "Split Horizontally"
+
+msgid "Split Vertically"
+msgstr "Split Vertically"
+
+msgid "Close Pane"
+msgstr "Close Pane"
+
+msgid "New Tab"
+msgstr "New Tab"
+
+msgid "Toggle Fullscreen"
+msgstr "Toggle Fullscreen"
+
+msgid "Open Settings"
+msgstr "Open Settings"
+
+msgid "Clear Scrollback"
+msgstr "Clear Scrollback"
+
+msgid "Layout"
+msgstr "Layout"
+
+msgid "Save Current Layout"
+msgstr "Save Current Layout"
+
+msgid "Load Saved Layout"
+msgstr "Load Saved Layout"
+
+msgid "Drag and drop onto another pane to swap/split"
+msgstr "Drag and drop onto another pane to swap/split"
+
+msgid "[Split-H]"
+msgstr "[Split-H]"
+
+msgid "Split Horizontally (Left/Right)"
+msgstr "Split Horizontally (Left/Right)"
+
+msgid "[Split-V]"
+msgstr "[Split-V]"
+
+msgid "Split Vertically (Top/Bottom)"
+msgstr "Split Vertically (Top/Bottom)"
+
+msgid "[+Tab]"
+msgstr "[+Tab]"
+
+msgid "Add a new tab in this pane"
+msgstr "Add a new tab in this pane"
+
+msgid "Close this pane"
+msgstr "Close this pane"
+
+msgid "Maximize / Restore window"
+msgstr "Maximize / Restore window"
+
+msgid "Minimize window"
+msgstr "Minimize window"
+
+msgid "Rename pane title"
+msgstr "Rename pane title"
+
+msgid "Open CustomDragBar Preferences"
+msgstr "Open CustomDragBar Preferences"
+
+msgid "CustomDragBar Configuration"
+msgstr "CustomDragBar Configuration"
+
+msgid "Titlebar & Frame"
+msgstr "Titlebar & Frame"
+
+msgid "Font"
+msgstr "Font"
+
+msgid "Language"
+msgstr "Language"
+
+msgid "Restore Defaults"
+msgstr "Restore Defaults"
+
+msgid ""
+"Enter color codes (e.g. #2b2b2b, rgb(40,40,40)) or select using the color picker.\n"
+"Empty or invalid values automatically fallback to default colors."
+msgstr ""
+"Enter color codes (e.g. #2b2b2b, rgb(40,40,40)) or select using the color picker.\n"
+"Empty or invalid values automatically fallback to default colors."
+
+msgid "Active Title BG:"
+msgstr "Active Title BG:"
+
+msgid "Active Title FG:"
+msgstr "Active Title FG:"
+
+msgid "Inactive Title BG:"
+msgstr "Inactive Title BG:"
+
+msgid "Inactive Title FG:"
+msgstr "Inactive Title FG:"
+
+msgid "Window Frame BG:"
+msgstr "Window Frame BG:"
+
+msgid "Window Border Color:"
+msgstr "Window Border Color:"
+
+msgid "Pane Separator Color:"
+msgstr "Pane Separator Color:"
+
+msgid "Pane Separator Width (px):"
+msgstr "Pane Separator Width (px):"
+
+msgid "Window Border Width (px):"
+msgstr "Window Border Width (px):"
+
+msgid "Empty = Default"
+msgstr "Empty = Default"
+
+msgid "Applied"
+msgstr "Applied"
+
+msgid "Invalid"
+msgstr "Invalid"
+
+msgid "Select a font installed on your Debian system or enter a custom font file path (.ttf / .otf / .ttc)."
+msgstr "Select a font installed on your Debian system or enter a custom font file path (.ttf / .otf / .ttc)."
+
+msgid "Filter System Fonts:"
+msgstr "Filter System Fonts:"
+
+msgid "Type to filter (e.g. noto, mono, vl)..."
+msgstr "Type to filter (e.g. noto, mono, vl)..."
+
+msgid "Rescan"
+msgstr "Rescan"
+
+msgid "System Font:"
+msgstr "System Font:"
+
+msgid "Default (Auto-detect)"
+msgstr "Default (Auto-detect)"
+
+msgid "Font File Path:"
+msgstr "Font File Path:"
+
+msgid "UI & Menu Font Size (px):"
+msgstr "UI & Menu Font Size (px):"
+
+msgid "Terminal Font Size (px):"
+msgstr "Terminal Font Size (px):"
+
+msgid "Preview:"
+msgstr "Preview:"
+
+msgid "Select UI language or load a custom GNU gettext (.po) translation file."
+msgstr "Select UI language or load a custom GNU gettext (.po) translation file."
+
+msgid "Language (.po):"
+msgstr "Language (.po):"
+
+msgid "Auto (System Locale)"
+msgstr "Auto (System Locale)"
+
+msgid "Custom .po File Path:"
+msgstr "Custom .po File Path:"
+
+msgid "Reload .po Files"
+msgstr "Reload .po Files"
+
+msgid "Active Catalog:"
+msgstr "Active Catalog:"
+
+msgid "Save or restore your multi-pane workspace split and tab layout."
+msgstr "Save or restore your multi-pane workspace split and tab layout."
+
+msgid "Shortcuts"
+msgstr "Shortcuts"
+
+msgid "Open Font Sample Catalog..."
+msgstr "Open Font Sample Catalog..."
+
+msgid "System Font Samples & Selector"
+msgstr "System Font Samples & Selector"
+
+msgid "Browse installed system fonts with live text samples and click 'Use This Font' to apply."
+msgstr "Browse installed system fonts with live text samples and click 'Use This Font' to apply."
+
+msgid "Category:"
+msgstr "Category:"
+
+msgid "All Fonts"
+msgstr "All Fonts"
+
+msgid "Monospace"
+msgstr "Monospace"
+
+msgid "Japanese / CJK"
+msgstr "Japanese / CJK"
+
+msgid "Type to filter (e.g. noto, mono, vl, gothic)..."
+msgstr "Type to filter (e.g. noto, mono, vl, gothic)..."
+
+msgid "Sample Text:"
+msgstr "Sample Text:"
+
+msgid "Matching Fonts"
+msgstr "Matching Fonts"
+
+msgid "Selected"
+msgstr "Selected"
+
+msgid "Use This Font"
+msgstr "Use This Font"
+
+msgid ""
+"Configure keyboard shortcuts for terminal and workspace actions.\n"
+"You can type a shortcut directly (e.g. Ctrl+Shift+T, Alt+D, F11) or click 'Record' and press a key combination."
+msgstr ""
+"Configure keyboard shortcuts for terminal and workspace actions.\n"
+"You can type a shortcut directly (e.g. Ctrl+Shift+T, Alt+D, F11) or click 'Record' and press a key combination."
+
+msgid "Copy Selection:"
+msgstr "Copy Selection:"
+
+msgid "Paste Clipboard:"
+msgstr "Paste Clipboard:"
+
+msgid "Split Horizontally:"
+msgstr "Split Horizontally:"
+
+msgid "Split Vertically:"
+msgstr "Split Vertically:"
+
+msgid "New Tab:"
+msgstr "New Tab:"
+
+msgid "Close Pane:"
+msgstr "Close Pane:"
+
+msgid "Focus Next Pane:"
+msgstr "Focus Next Pane:"
+
+msgid "Focus Previous Pane:"
+msgstr "Focus Previous Pane:"
+
+msgid "Open Preferences:"
+msgstr "Open Preferences:"
+
+msgid "Toggle Fullscreen:"
+msgstr "Toggle Fullscreen:"
+
+msgid "Zoom In:"
+msgstr "Zoom In:"
+
+msgid "Zoom Out:"
+msgstr "Zoom Out:"
+
+msgid "Reset Zoom:"
+msgstr "Reset Zoom:"
+
+msgid "Reset Shortcuts to Defaults"
+msgstr "Reset Shortcuts to Defaults"
+
+msgid "Press keys... (Esc to cancel)"
+msgstr "Press keys... (Esc to cancel)"
+
+msgid "Record"
+msgstr "Record"
+
+msgid "Default"
+msgstr "Default"

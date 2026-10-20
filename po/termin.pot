@@ -1,0 +1,383 @@
+# SOME DESCRIPTIVE TITLE.
+# Copyright (C) 2026 kotaro, termin
+# This file is distributed under the same license as the termin package (GPL-2.0).
+#
+#, fuzzy
+msgid ""
+msgstr ""
+"Project-Id-Version: termin 0.1.0\n"
+"POT-Creation-Date: 2026-10-20 20:00+0900\n"
+"PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
+"Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
+"Language-Team: LANGUAGE <LL@li.org>\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+
+#: src/menus/presets.rs
+msgid "Copy"
+msgstr ""
+
+#: src/menus/presets.rs
+msgid "Paste"
+msgstr ""
+
+#: src/menus/presets.rs
+msgid "Split Pane"
+msgstr ""
+
+#: src/menus/presets.rs
+msgid "Split Horizontally"
+msgstr ""
+
+#: src/menus/presets.rs
+msgid "Split Vertically"
+msgstr ""
+
+#: src/menus/presets.rs
+msgid "Close Pane"
+msgstr ""
+
+#: src/menus/presets.rs
+msgid "New Tab"
+msgstr ""
+
+#: src/menus/presets.rs
+msgid "Toggle Fullscreen"
+msgstr ""
+
+#: src/menus/presets.rs
+msgid "Open Settings"
+msgstr ""
+
+#: src/menus/presets.rs
+msgid "Clear Scrollback"
+msgstr ""
+
+#: src/menus/presets.rs
+msgid "Layout"
+msgstr ""
+
+#: src/menus/presets.rs
+msgid "Save Current Layout"
+msgstr ""
+
+#: src/menus/presets.rs
+msgid "Load Saved Layout"
+msgstr ""
+
+#: src/ui/titlebar.rs
+msgid "Drag and drop onto another pane to swap/split"
+msgstr ""
+
+#: src/ui/titlebar.rs
+msgid "[Split-H]"
+msgstr ""
+
+#: src/ui/titlebar.rs
+msgid "Split Horizontally (Left/Right)"
+msgstr ""
+
+#: src/ui/titlebar.rs
+msgid "[Split-V]"
+msgstr ""
+
+#: src/ui/titlebar.rs
+msgid "Split Vertically (Top/Bottom)"
+msgstr ""
+
+#: src/ui/titlebar.rs
+msgid "[+Tab]"
+msgstr ""
+
+#: src/ui/titlebar.rs
+msgid "Add a new tab in this pane"
+msgstr ""
+
+#: src/ui/titlebar.rs
+msgid "Close this pane"
+msgstr ""
+
+#: src/ui/titlebar.rs
+msgid "Maximize / Restore window"
+msgstr ""
+
+#: src/ui/titlebar.rs
+msgid "Minimize window"
+msgstr ""
+
+#: src/ui/titlebar.rs
+msgid "Rename pane title"
+msgstr ""
+
+#: src/ui/titlebar.rs
+msgid "Open CustomDragBar Preferences"
+msgstr ""
+
+#: src/config/prefs_ui.rs
+msgid "CustomDragBar Configuration"
+msgstr ""
+
+#: src/config/prefs_ui.rs
+msgid "Titlebar & Frame"
+msgstr ""
+
+#: src/config/prefs_ui.rs
+msgid "Font"
+msgstr ""
+
+#: src/config/prefs_ui.rs
+msgid "Language"
+msgstr ""
+
+#: src/config/prefs_ui.rs
+msgid "Restore Defaults"
+msgstr ""
+
+#: src/config/prefs_ui.rs
+msgid ""
+"Enter color codes (e.g. #2b2b2b, rgb(40,40,40)) or select using the color picker.\n"
+"Empty or invalid values automatically fallback to default colors."
+msgstr ""
+
+#: src/config/prefs_ui.rs
+msgid "Active Title BG:"
+msgstr ""
+
+#: src/config/prefs_ui.rs
+msgid "Active Title FG:"
+msgstr ""
+
+#: src/config/prefs_ui.rs
+msgid "Inactive Title BG:"
+msgstr ""
+
+#: src/config/prefs_ui.rs
+msgid "Inactive Title FG:"
+msgstr ""
+
+#: src/config/prefs_ui.rs
+msgid "Window Frame BG:"
+msgstr ""
+
+#: src/config/prefs_ui.rs
+msgid "Window Border Color:"
+msgstr ""
+
+#: src/config/prefs_ui.rs
+msgid "Pane Separator Color:"
+msgstr ""
+
+#: src/config/prefs_ui.rs
+msgid "Pane Separator Width (px):"
+msgstr ""
+
+#: src/config/prefs_ui.rs
+msgid "Window Border Width (px):"
+msgstr ""
+
+#: src/config/prefs_ui.rs
+msgid "Empty = Default"
+msgstr ""
+
+#: src/config/prefs_ui.rs
+msgid "Applied"
+msgstr ""
+
+#: src/config/prefs_ui.rs
+msgid "Invalid"
+msgstr ""
+
+#: src/config/prefs_ui.rs
+msgid "Select a font installed on your Debian system or enter a custom font file path (.ttf / .otf / .ttc)."
+msgstr ""
+
+#: src/config/prefs_ui.rs
+msgid "Filter System Fonts:"
+msgstr ""
+
+#: src/config/prefs_ui.rs
+msgid "Type to filter (e.g. noto, mono, vl)..."
+msgstr ""
+
+#: src/config/prefs_ui.rs
+msgid "Rescan"
+msgstr ""
+
+#: src/config/prefs_ui.rs
+msgid "System Font:"
+msgstr ""
+
+#: src/config/prefs_ui.rs
+msgid "Default (Auto-detect)"
+msgstr ""
+
+#: src/config/prefs_ui.rs
+msgid "Font File Path:"
+msgstr ""
+
+#: src/config/prefs_ui.rs
+msgid "UI & Menu Font Size (px):"
+msgstr ""
+
+#: src/config/prefs_ui.rs
+msgid "Terminal Font Size (px):"
+msgstr ""
+
+#: src/config/prefs_ui.rs
+msgid "Preview:"
+msgstr ""
+
+#: src/config/prefs_ui.rs
+msgid "Select UI language or load a custom GNU gettext (.po) translation file."
+msgstr ""
+
+#: src/config/prefs_ui.rs
+msgid "Language (.po):"
+msgstr ""
+
+#: src/config/prefs_ui.rs
+msgid "Auto (System Locale)"
+msgstr ""
+
+#: src/config/prefs_ui.rs
+msgid "Custom .po File Path:"
+msgstr ""
+
+#: src/config/prefs_ui.rs
+msgid "Reload .po Files"
+msgstr ""
+
+#: src/config/prefs_ui.rs
+msgid "Active Catalog:"
+msgstr ""
+
+#: src/config/prefs_ui.rs
+msgid "Save or restore your multi-pane workspace split and tab layout."
+msgstr ""
+
+#: src/config/prefs_ui.rs
+msgid "Shortcuts"
+msgstr ""
+
+#: src/config/prefs_ui.rs
+msgid "Open Font Sample Catalog..."
+msgstr ""
+
+#: src/config/prefs_ui.rs
+msgid "System Font Samples & Selector"
+msgstr ""
+
+#: src/config/prefs_ui.rs
+msgid "Browse installed system fonts with live text samples and click 'Use This Font' to apply."
+msgstr ""
+
+#: src/config/prefs_ui.rs
+msgid "Category:"
+msgstr ""
+
+#: src/config/prefs_ui.rs
+msgid "All Fonts"
+msgstr ""
+
+#: src/config/prefs_ui.rs
+msgid "Monospace"
+msgstr ""
+
+#: src/config/prefs_ui.rs
+msgid "Japanese / CJK"
+msgstr ""
+
+#: src/config/prefs_ui.rs
+msgid "Type to filter (e.g. noto, mono, vl, gothic)..."
+msgstr ""
+
+#: src/config/prefs_ui.rs
+msgid "Sample Text:"
+msgstr ""
+
+#: src/config/prefs_ui.rs
+msgid "Matching Fonts"
+msgstr ""
+
+#: src/config/prefs_ui.rs
+msgid "Selected"
+msgstr ""
+
+#: src/config/prefs_ui.rs
+msgid "Use This Font"
+msgstr ""
+
+#: src/config/prefs_ui.rs
+msgid ""
+"Configure keyboard shortcuts for terminal and workspace actions.\n"
+"You can type a shortcut directly (e.g. Ctrl+Shift+T, Alt+D, F11) or click 'Record' and press a key combination."
+msgstr ""
+
+#: src/config/prefs_ui.rs
+msgid "Copy Selection:"
+msgstr ""
+
+#: src/config/prefs_ui.rs
+msgid "Paste Clipboard:"
+msgstr ""
+
+#: src/config/prefs_ui.rs
+msgid "Split Horizontally:"
+msgstr ""
+
+#: src/config/prefs_ui.rs
+msgid "Split Vertically:"
+msgstr ""
+
+#: src/config/prefs_ui.rs
+msgid "New Tab:"
+msgstr ""
+
+#: src/config/prefs_ui.rs
+msgid "Close Pane:"
+msgstr ""
+
+#: src/config/prefs_ui.rs
+msgid "Focus Next Pane:"
+msgstr ""
+
+#: src/config/prefs_ui.rs
+msgid "Focus Previous Pane:"
+msgstr ""
+
+#: src/config/prefs_ui.rs
+msgid "Open Preferences:"
+msgstr ""
+
+#: src/config/prefs_ui.rs
+msgid "Toggle Fullscreen:"
+msgstr ""
+
+#: src/config/prefs_ui.rs
+msgid "Zoom In:"
+msgstr ""
+
+#: src/config/prefs_ui.rs
+msgid "Zoom Out:"
+msgstr ""
+
+#: src/config/prefs_ui.rs
+msgid "Reset Zoom:"
+msgstr ""
+
+#: src/config/prefs_ui.rs
+msgid "Reset Shortcuts to Defaults"
+msgstr ""
+
+#: src/config/prefs_ui.rs
+msgid "Press keys... (Esc to cancel)"
+msgstr ""
+
+#: src/config/prefs_ui.rs
+msgid "Record"
+msgstr ""
+
+#: src/config/prefs_ui.rs
+msgid "Default"
+msgstr ""

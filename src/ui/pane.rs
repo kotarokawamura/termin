@@ -15,7 +15,7 @@
 // Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
 use eframe::egui;
 use egui_tiles::TileId;
-use crate::config::theme::ThemeSettings;
+use crate::config::theme::{shortcut_matches_event, ShortcutSettings, ThemeSettings};
 use crate::menus::{
     MenuManager,
     types::{MenuAction, MenuContext},
@@ -23,8 +23,7 @@ use crate::menus::{
 use crate::session::local_pty::LocalPtySession;
 use crate::session::SessionDriver;
 use crate::ui::titlebar::{render_titlebar, TitleBarAction};
-use crate::vte::vt100_adapter::Vt100Adapter;
-use crate::vte::TerminalBackend;
+use crate::vte::Vt100Adapter;
 
 /// Returns the default pane title based on the current `$SHELL` environment variable.
 pub fn default_shell_title() -> String {
@@ -45,7 +44,7 @@ pub struct TerminalPane {
     pub editing_title: bool,
     pub zoom_scale: f32,
     pub scroll_accum_y: f32,
-    pub backend: Box<dyn TerminalBackend>,
+    pub backend: Vt100Adapter,
     pub session: Box<dyn SessionDriver>,
     pub selection_start: Option<(u16, u16)>,
     pub selection_end: Option<(u16, u16)>,
@@ -61,7 +60,7 @@ impl TerminalPane {
     pub fn new_with_command(id: usize, title: &str, startup_command: Option<&str>) -> Self {
         let rows = 24;
         let cols = 80;
-        let backend = Box::new(Vt100Adapter::new(rows, cols));
+        let backend = Vt100Adapter::new(rows, cols);
         let session = Box::new(LocalPtySession::new_with_command(rows, cols, startup_command));
 
         Self {
@@ -114,18 +113,31 @@ impl TerminalPane {
         settings: &ThemeSettings,
         is_focused: bool,
         is_top_right: bool,
-        prefs_open: bool,
+        other_screen_open: bool,
+        prefs_capturing_pointer: bool,
         any_editing_title: bool,
         workspace_dragging: bool,
         external_zoom_delta: f32,
     ) -> PaneUiOutput {
         let mut clicked_or_focused = false;
 
-        // Visually treat pane as inactive when it cannot be interacted with
-        // (e.g., during a drag operation, while a context menu is open, or while Preferences is open)
+        let canvas_id = egui::Id::new(("term_canvas", tile_id));
+        let scrollbar_id = egui::Id::new(("term_scrollbar", tile_id));
+        let window_focused = ui.input(|i| i.focused);
+        let other_widget_dragged = ui
+            .ctx()
+            .dragged_id()
+            .is_some_and(|id| id != canvas_id && id != scrollbar_id);
         let popup_open = egui::Popup::is_any_open(ui.ctx());
-        let any_dragging = workspace_dragging || ui.ctx().dragged_id().is_some();
-        let visually_active = is_focused && !prefs_open && !popup_open && !any_dragging;
+        let other_pane_editing_title = any_editing_title && !self.editing_title;
+        let blocked_by_other_screen =
+            other_screen_open || prefs_capturing_pointer || other_pane_editing_title;
+        let any_dragging = workspace_dragging || other_widget_dragged;
+        let visually_active = is_focused
+            && window_focused
+            && !popup_open
+            && !any_dragging
+            && !blocked_by_other_screen;
 
         // 1. Render Terminator-style titlebar
         let tb_out = render_titlebar(
@@ -136,10 +148,15 @@ impl TerminalPane {
             &mut self.editing_title,
             visually_active,
             is_top_right,
+            blocked_by_other_screen,
             settings,
         );
-        if tb_out.clicked {
+        if tb_out.clicked && !blocked_by_other_screen && !popup_open {
             clicked_or_focused = true;
+        }
+        let any_dragging = any_dragging || tb_out.is_dragging || tb_out.start_tile_drag;
+        if any_dragging || blocked_by_other_screen || popup_open || !visually_active {
+            self.select_anchor_pos = None;
         }
 
         // 2. Render terminal screen canvas + right-side scrollbar
@@ -155,41 +172,44 @@ impl TerminalPane {
             full_rect.max,
         );
 
-        let term_resp = ui.interact(
-            rect,
-            egui::Id::new(("term_canvas", tile_id)),
-            egui::Sense::click_and_drag(),
-        );
-        let scrollbar_resp = ui.interact(
-            scrollbar_rect,
-            egui::Id::new(("term_scrollbar", tile_id)),
-            egui::Sense::click_and_drag(),
-        );
-        if term_resp.clicked()
-            || term_resp.drag_started()
-            || scrollbar_resp.clicked()
-            || scrollbar_resp.drag_started()
+        let pointer_over_floating = blocked_by_other_screen
+            || ui
+                .input(|i| i.pointer.interact_pos().or_else(|| i.pointer.hover_pos()))
+                .and_then(|pos| ui.ctx().layer_id_at(pos))
+                .is_some_and(|layer| layer.order != egui::Order::Background);
+
+        let canvas_sense = if blocked_by_other_screen || popup_open || pointer_over_floating {
+            egui::Sense::hover()
+        } else if visually_active && !any_dragging {
+            egui::Sense::click_and_drag()
+        } else {
+            egui::Sense::CLICK
+        };
+        let term_resp = ui.interact(rect, canvas_id, canvas_sense);
+        let scrollbar_resp = ui.interact(scrollbar_rect, scrollbar_id, canvas_sense);
+        if !blocked_by_other_screen
+            && !popup_open
+            && !any_dragging
+            && !pointer_over_floating
+            && (term_resp.clicked() || scrollbar_resp.clicked())
         {
             clicked_or_focused = true;
         }
 
-        let pane_hovered = term_resp.hovered() || scrollbar_resp.hovered();
+        let pane_hovered = (term_resp.hovered() || scrollbar_resp.hovered())
+            && !pointer_over_floating
+            && !blocked_by_other_screen
+            && !popup_open;
         let super_held = ui.input(|i| {
             i.key_down(egui::Key::SuperLeft)
                 || i.key_down(egui::Key::SuperRight)
                 || i.modifiers.mac_cmd
         });
 
-        // Pinch-out and pinch-in zoom gestures on the focused or hovered panel
-        let zoom_delta = if (is_focused || pane_hovered)
-            && !self.editing_title
-            && !any_editing_title
-            && !prefs_open
-        {
+        // Pinch-out and pinch-in zoom gestures on the active panel
+        let zoom_delta = if visually_active && !self.editing_title && !any_dragging {
             let mut zd = ui.input(|i| i.zoom_delta());
-            if is_focused || pane_hovered {
-                zd *= external_zoom_delta;
-            }
+            zd *= external_zoom_delta;
             if super_held && pane_hovered {
                 let scroll_y = ui.input(|i| i.smooth_scroll_delta.y);
                 if scroll_y.abs() > 0.1 {
@@ -202,15 +222,33 @@ impl TerminalPane {
         };
         if (zoom_delta - 1.0).abs() > 0.001 {
             self.zoom_scale = (self.zoom_scale * zoom_delta).clamp(0.4, 3.5);
-            if pane_hovered {
-                clicked_or_focused = true;
-            }
         }
 
         let term_font_size =
             (settings.effective_terminal_font_size() * self.zoom_scale).clamp(6.0, 64.0);
+        let font_id = egui::FontId::monospace(term_font_size);
         let char_w = (term_font_size * 0.6).max(4.0);
-        let char_h = (term_font_size * 1.15).max(8.0);
+
+        // Measure actual rendered glyph bounds of a representative shell prompt ("hk~$日")
+        // so the cell rect and cursor highlight are vertically centered on the visible glyph ink
+        // rather than skewed upwards by CJK font ascent leading.
+        let ref_galley = ui.painter().layout_no_wrap(
+            "hk~$日".to_string(),
+            font_id.clone(),
+            egui::Color32::WHITE,
+        );
+        let (ink_min_y, ink_max_y) = if ref_galley.mesh_bounds.height() > 1.0 {
+            (ref_galley.mesh_bounds.min.y, ref_galley.mesh_bounds.max.y)
+        } else {
+            let rh = ui.fonts_mut(|f| f.row_height(&font_id));
+            (0.0, rh)
+        };
+        let ink_h = (ink_max_y - ink_min_y).max(term_font_size * 0.85);
+        let char_h = (ink_h + (term_font_size * 0.28).max(4.0))
+            .round()
+            .max(8.0);
+        let ink_center_y = (ink_min_y + ink_max_y) * 0.5;
+        let glyph_y_offset = (char_h * 0.5) - ink_center_y;
         let pad = 4.0_f32;
 
         let inner_w = (rect.width() - pad * 2.0).max(0.0);
@@ -223,7 +261,7 @@ impl TerminalPane {
             self.session.resize(new_rows, new_cols);
         }
 
-        // Handle mouse drag selection on the terminal grid (supports 1+ character selections)
+        // Handle mouse drag selection on the terminal grid (only when active and not dragging windows/titlebars)
         let (rows, cols) = self.backend.size();
         let pos_to_cell = |pos: egui::Pos2| -> (u16, u16) {
             let rel_x = (pos.x - (rect.min.x + pad)).max(0.0);
@@ -233,22 +271,26 @@ impl TerminalPane {
             (r, c)
         };
 
+        let can_select_text = visually_active
+            && !self.editing_title
+            && !any_dragging
+            && !pointer_over_floating;
+
         let primary_pressed = ui.input(|i| i.pointer.button_pressed(egui::PointerButton::Primary));
         let primary_down = ui.input(|i| i.pointer.button_down(egui::PointerButton::Primary));
         let primary_released = ui.input(|i| i.pointer.button_released(egui::PointerButton::Primary));
         let pointer_pos = ui.input(|i| i.pointer.interact_pos());
 
-        if primary_pressed && !popup_open {
+        if primary_pressed && can_select_text {
             if let Some(pos) = pointer_pos {
                 if rect.contains(pos) {
                     self.select_anchor_pos = Some(pos);
                     self.selection_start = None;
                     self.selection_end = None;
-                    clicked_or_focused = true;
                 }
             }
         }
-        if primary_down {
+        if primary_down && can_select_text {
             if let (Some(anchor), Some(pos)) = (self.select_anchor_pos, pointer_pos) {
                 if pos.distance(anchor) >= 2.0 {
                     self.selection_start = Some(pos_to_cell(anchor));
@@ -256,12 +298,18 @@ impl TerminalPane {
                 }
             }
         }
-        if primary_released {
+        if primary_released || !can_select_text {
             self.select_anchor_pos = None;
         }
 
-        // Handle mouse wheel / touchpad scrollback when hovering over this pane or its scrollbar
-        if pane_hovered && !super_held && (zoom_delta - 1.0).abs() <= 0.001 {
+        // Handle mouse wheel / touchpad scrollback when hovering over this active pane or its scrollbar
+        if visually_active
+            && !self.editing_title
+            && pane_hovered
+            && !any_dragging
+            && !super_held
+            && (zoom_delta - 1.0).abs() <= 0.001
+        {
             let scroll_y = ui.input(|i| i.smooth_scroll_delta.y);
             if scroll_y.abs() > 0.01 {
                 self.scroll_accum_y += scroll_y;
@@ -274,7 +322,7 @@ impl TerminalPane {
             }
         }
 
-        // Handle interactive scrollbar click/drag
+        // Handle interactive scrollbar click/drag (only when pane is active)
         let max_scroll = self.backend.max_scroll_offset();
         let total_lines = (rows as usize) + max_scroll;
         let track_pad = 2.0_f32;
@@ -287,7 +335,13 @@ impl TerminalPane {
         let thumb_h = (track_h * visible_frac).clamp(18.0_f32.min(track_h), track_h);
         let scrollable_track_h = (track_h - thumb_h).max(1.0);
 
-        if max_scroll > 0 && (scrollbar_resp.clicked() || scrollbar_resp.dragged()) {
+        if visually_active
+            && !self.editing_title
+            && !any_dragging
+            && !pointer_over_floating
+            && max_scroll > 0
+            && (scrollbar_resp.clicked() || scrollbar_resp.dragged())
+        {
             if let Some(pos) = scrollbar_resp.interact_pointer_pos() {
                 let rel_y = ((pos.y - (scrollbar_rect.min.y + track_pad) - thumb_h * 0.5)
                     / scrollable_track_h)
@@ -297,70 +351,71 @@ impl TerminalPane {
             }
         }
 
-        // 3. Context menu for the terminal screen canvas
+        // 3. Context menu for the terminal screen canvas (only when active and no other window/screen is open)
         let mut menu_action_output = None;
-        if let Some((_ctx, menu_action)) = menus.show(&term_resp, MenuContext::Pane(tile_id)) {
-            clicked_or_focused = true;
-            match menu_action {
-                MenuAction::Copy => {
-                    self.copy_selection_or_screen(ui.ctx());
+        if !blocked_by_other_screen && (is_focused || popup_open) {
+            if let Some((_ctx, menu_action)) =
+                menus.show(&term_resp, MenuContext::Pane(tile_id), &settings.shortcuts)
+            {
+                clicked_or_focused = true;
+                match menu_action {
+                    MenuAction::Copy => {
+                        self.copy_selection_or_screen(ui.ctx());
+                    }
+                    MenuAction::Paste => {
+                        self.pending_paste = true;
+                        ui.ctx().send_viewport_cmd(egui::ViewportCommand::RequestPaste);
+                    }
+                    MenuAction::SplitHorizontal => {
+                        menu_action_output = Some(TitleBarAction::SplitHorizontal);
+                    }
+                    MenuAction::SplitVertical => {
+                        menu_action_output = Some(TitleBarAction::SplitVertical);
+                    }
+                    MenuAction::NewTab => {
+                        menu_action_output = Some(TitleBarAction::NewTab);
+                    }
+                    MenuAction::ClearScrollback => {
+                        self.backend.clear_scrollback();
+                    }
+                    MenuAction::ClosePane => {
+                        menu_action_output = Some(TitleBarAction::ClosePane);
+                    }
+                    MenuAction::OpenSettings => {
+                        menu_action_output = Some(TitleBarAction::OpenPreferences);
+                    }
+                    _ => {}
                 }
-                MenuAction::Paste => {
-                    self.pending_paste = true;
-                    ui.ctx().send_viewport_cmd(egui::ViewportCommand::RequestPaste);
-                }
-                MenuAction::SplitHorizontal => {
-                    menu_action_output = Some(TitleBarAction::SplitHorizontal);
-                }
-                MenuAction::SplitVertical => {
-                    menu_action_output = Some(TitleBarAction::SplitVertical);
-                }
-                MenuAction::NewTab => {
-                    menu_action_output = Some(TitleBarAction::NewTab);
-                }
-                MenuAction::ClearScrollback => {
-                    self.backend.clear_scrollback();
-                }
-                MenuAction::ClosePane => {
-                    menu_action_output = Some(TitleBarAction::ClosePane);
-                }
-                MenuAction::OpenSettings => {
-                    menu_action_output = Some(TitleBarAction::OpenPreferences);
-                }
-                _ => {}
             }
         }
 
-        let pane_context_menu_open =
-            tb_out.context_menu_open || term_resp.context_menu_opened() || egui::Popup::is_any_open(ui.ctx());
-        let pane_dragging = tb_out.is_dragging
-            || any_dragging
-            || term_resp.dragged_by(egui::PointerButton::Primary)
-            || scrollbar_resp.dragged_by(egui::PointerButton::Primary);
-        let can_interact =
-            is_focused && !self.editing_title && !any_editing_title && !prefs_open && !pane_context_menu_open;
+        let pane_context_menu_open = !blocked_by_other_screen
+            && (tb_out.context_menu_open
+                || term_resp.context_menu_opened()
+                || egui::Popup::is_any_open(ui.ctx()));
+        let can_interact = visually_active
+            && !self.editing_title
+            && !pane_context_menu_open
+            && !any_dragging;
 
         // Forward keyboard events to PTY when this pane can be interacted with
         let mut shortcut_key_action = None;
         if can_interact {
-            // If Tab was pressed, clear any accidental egui focus so Tab stays in the terminal
-            if ui.input(|i| i.key_pressed(egui::Key::Tab)) {
-                if let Some(focused_id) = ui.ctx().memory(|m| m.focused()) {
-                    ui.ctx().memory_mut(|m| m.surrender_focus(focused_id));
-                }
+            // Ensure no stray egui widget holds focus while interacting with the terminal
+            if let Some(focused_id) = ui.ctx().memory(|m| m.focused()) {
+                ui.ctx().memory_mut(|m| m.surrender_focus(focused_id));
             }
-            shortcut_key_action = self.handle_shortcut_keyboard_input(ui);
+            shortcut_key_action = self.handle_shortcut_keyboard_input(ui, &settings.shortcuts);
             self.handle_keyboard_input(ui, shortcut_key_action.is_some());
         }
 
         let painter = ui.painter_at(full_rect);
-        painter.rect_filled(full_rect, 0.0, egui::Color32::from_rgb(18, 18, 18));
+        painter.rect_filled(full_rect, 0.0, egui::Color32::from_rgb(24, 24, 24));
 
         // Draw cells in two passes:
         // Pass 1: Backgrounds and selection highlights (prevents wide CJK glyphs from being clipped by the next cell's background)
         // Pass 2: Foreground text glyphs and underlines
         let (rows, cols) = self.backend.size();
-        let font_id = egui::FontId::monospace(term_font_size);
         let norm_selection = self.normalized_selection();
 
         for r in 0..rows {
@@ -428,7 +483,7 @@ impl TerminalPane {
 
                 if cell.ch != ' ' && cell.ch != '\0' {
                     painter.text(
-                        cell_min,
+                        egui::pos2(cell_min.x, cell_min.y + glyph_y_offset),
                         egui::Align2::LEFT_TOP,
                         cell.ch,
                         font_id.clone(),
@@ -438,7 +493,7 @@ impl TerminalPane {
 
                 if cell.underline {
                     let width_cells = if cell.wide { 2.0 } else { 1.0 };
-                    let y = cell_min.y + char_h - 1.5;
+                    let y = (cell_min.y + glyph_y_offset + ink_max_y).min(cell_min.y + char_h - 1.0);
                     painter.line_segment(
                         [
                             egui::pos2(cell_min.x, y),
@@ -450,15 +505,17 @@ impl TerminalPane {
             }
         }
 
-        // Draw cursor
+        // Draw cursor vertically centered with the shell prompt glyph ink
         let cursor = self.backend.cursor();
-        let cursor_visually_active = is_focused && !pane_context_menu_open && !pane_dragging && !prefs_open;
+        let cursor_visually_active = visually_active && !pane_context_menu_open;
         if cursor.visible && cursor.row < rows && cursor.col < cols {
             let cur_min = egui::pos2(
                 rect.min.x + pad + (cursor.col as f32) * char_w,
                 rect.min.y + pad + (cursor.row as f32) * char_h,
             );
-            let cur_rect = egui::Rect::from_min_size(cur_min, egui::vec2(char_w, char_h));
+            let cursor_cell = self.backend.read_cell(cursor.row, cursor.col);
+            let cur_w = if cursor_cell.wide { char_w * 2.0 } else { char_w };
+            let cur_rect = egui::Rect::from_min_size(cur_min, egui::vec2(cur_w, char_h));
             if cursor_visually_active {
                 painter.rect_filled(
                     cur_rect,
@@ -514,6 +571,16 @@ impl TerminalPane {
                 badge_text,
                 egui::FontId::monospace(11.0),
                 egui::Color32::from_rgb(250, 204, 21),
+            );
+        }
+
+        // Darken inactive/background panels so it is visually obvious they are disabled
+        let is_background_or_inactive = !visually_active || pane_context_menu_open;
+        if is_background_or_inactive {
+            painter.rect_filled(
+                full_rect,
+                0.0,
+                egui::Color32::from_rgba_unmultiplied(0, 0, 0, 115),
             );
         }
 
@@ -624,7 +691,11 @@ impl TerminalPane {
         }
     }
 
-    fn handle_shortcut_keyboard_input(&mut self, ui: &mut egui::Ui) -> Option<TitleBarAction> {
+    fn handle_shortcut_keyboard_input(
+        &mut self,
+        ui: &mut egui::Ui,
+        shortcuts: &ShortcutSettings,
+    ) -> Option<TitleBarAction> {
         let mut action = None;
         let events = ui.input(|i| i.events.clone());
         let shift_held = ui.input(|i| i.modifiers.shift);
@@ -664,6 +735,63 @@ impl TerminalPane {
                     modifiers,
                     ..
                 } => {
+                    // Check configurable user shortcuts first
+                    if shortcut_matches_event(&shortcuts.copy, key, physical_key, modifiers, super_held) {
+                        self.copy_selection_or_screen(ui.ctx());
+                        continue;
+                    }
+                    if shortcut_matches_event(&shortcuts.paste, key, physical_key, modifiers, super_held) {
+                        if !has_paste_event {
+                            self.pending_paste = true;
+                            ui.ctx().send_viewport_cmd(egui::ViewportCommand::RequestPaste);
+                        }
+                        continue;
+                    }
+                    if shortcut_matches_event(&shortcuts.split_horizontal, key, physical_key, modifiers, super_held) {
+                        action = Some(TitleBarAction::SplitHorizontal);
+                        continue;
+                    }
+                    if shortcut_matches_event(&shortcuts.split_vertical, key, physical_key, modifiers, super_held) {
+                        action = Some(TitleBarAction::SplitVertical);
+                        continue;
+                    }
+                    if shortcut_matches_event(&shortcuts.new_tab, key, physical_key, modifiers, super_held) {
+                        action = Some(TitleBarAction::NewTab);
+                        continue;
+                    }
+                    if shortcut_matches_event(&shortcuts.close_pane, key, physical_key, modifiers, super_held) {
+                        action = Some(TitleBarAction::ClosePane);
+                        continue;
+                    }
+                    if shortcut_matches_event(&shortcuts.focus_next_pane, key, physical_key, modifiers, super_held) {
+                        action = Some(TitleBarAction::FocusNextPane);
+                        continue;
+                    }
+                    if shortcut_matches_event(&shortcuts.focus_prev_pane, key, physical_key, modifiers, super_held) {
+                        action = Some(TitleBarAction::FocusPrevPane);
+                        continue;
+                    }
+                    if shortcut_matches_event(&shortcuts.open_preferences, key, physical_key, modifiers, super_held) {
+                        action = Some(TitleBarAction::OpenPreferences);
+                        continue;
+                    }
+                    if shortcut_matches_event(&shortcuts.toggle_fullscreen, key, physical_key, modifiers, super_held) {
+                        action = Some(TitleBarAction::ToggleMaximizeWindow);
+                        continue;
+                    }
+                    if shortcut_matches_event(&shortcuts.zoom_in, key, physical_key, modifiers, super_held) {
+                        action = Some(TitleBarAction::ZoomIn);
+                        continue;
+                    }
+                    if shortcut_matches_event(&shortcuts.zoom_out, key, physical_key, modifiers, super_held) {
+                        action = Some(TitleBarAction::ZoomOut);
+                        continue;
+                    }
+                    if shortcut_matches_event(&shortcuts.zoom_reset, key, physical_key, modifiers, super_held) {
+                        action = Some(TitleBarAction::ZoomReset);
+                        continue;
+                    }
+
                     // Super+= / Super+- / Super+0 zoom shortcuts
                     if super_held || modifiers.mac_cmd {
                         match key {
@@ -891,7 +1019,7 @@ mod tests {
     }
 
     fn make_test_pane() -> TerminalPane {
-        let mut backend = Box::new(Vt100Adapter::new(24, 80));
+        let mut backend = Vt100Adapter::new(24, 80);
         backend.process_bytes(b"Hello, World!\r\nSecond Line\r\n");
         TerminalPane {
             id: 1,
@@ -924,10 +1052,11 @@ mod tests {
 
         // Verify Event::Copy (emitted by egui-winit on Ctrl+Shift+C / Ctrl+C) copies the selection
         let ctx = egui::Context::default();
+        let shortcuts = ShortcutSettings::default();
         let mut raw = egui::RawInput::default();
         raw.events.push(egui::Event::Copy);
         let mut out = ctx.run_ui(raw, |ui| {
-            pane.handle_shortcut_keyboard_input(ui);
+            pane.handle_shortcut_keyboard_input(ui, &shortcuts);
         });
         out.textures_delta.clear();
         let copied = out.platform_output.commands.iter().find_map(|cmd| {
@@ -944,6 +1073,7 @@ mod tests {
     fn test_super_zoom_shortcuts() {
         let mut pane = make_test_pane();
         let ctx = egui::Context::default();
+        let shortcuts = ShortcutSettings::default();
 
         // Super + = -> ZoomIn
         let mut raw_in = egui::RawInput::default();
@@ -963,7 +1093,7 @@ mod tests {
         });
         let mut action = None;
         ctx.run_ui(raw_in, |ui| {
-            action = pane.handle_shortcut_keyboard_input(ui);
+            action = pane.handle_shortcut_keyboard_input(ui, &shortcuts);
         })
         .textures_delta
         .clear();
@@ -979,10 +1109,271 @@ mod tests {
             modifiers: egui::Modifiers::NONE,
         });
         ctx.run_ui(raw_out, |ui| {
-            action = pane.handle_shortcut_keyboard_input(ui);
+            action = pane.handle_shortcut_keyboard_input(ui, &shortcuts);
         })
         .textures_delta
         .clear();
         assert_eq!(action, Some(TitleBarAction::ZoomOut));
+    }
+
+    #[test]
+    fn test_cursor_glyph_vertical_alignment() {
+        let ctx = egui::Context::default();
+        let settings = ThemeSettings::default();
+        settings.apply_fonts(&ctx);
+        let font_id = egui::FontId::monospace(14.0);
+        let mut raw = egui::RawInput::default();
+        raw.screen_rect = Some(egui::Rect::from_min_size(
+            egui::Pos2::ZERO,
+            egui::vec2(800.0, 600.0),
+        ));
+        ctx.run_ui(raw, |ui| {
+            let ref_galley = ui.painter().layout_no_wrap(
+                "hk~$日".to_string(),
+                font_id.clone(),
+                egui::Color32::WHITE,
+            );
+            let ink_min_y = ref_galley.mesh_bounds.min.y;
+            let ink_max_y = ref_galley.mesh_bounds.max.y;
+            let ink_h = (ink_max_y - ink_min_y).max(14.0 * 0.85);
+            let char_h = (ink_h + (14.0_f32 * 0.28).max(4.0)).round().max(8.0);
+            let ink_center_y = (ink_min_y + ink_max_y) * 0.5;
+            let glyph_y_offset = (char_h * 0.5) - ink_center_y;
+
+            let prompt_galley = ui.painter().layout_no_wrap(
+                "kotaro@debian:~$".to_string(),
+                font_id.clone(),
+                egui::Color32::WHITE,
+            );
+            let rendered_prompt_center_y =
+                glyph_y_offset + prompt_galley.mesh_bounds.center().y;
+            let cursor_center_y = char_h * 0.5;
+            assert!(
+                (rendered_prompt_center_y - cursor_center_y).abs() < 0.5,
+                "Cursor vertical center ({cursor_center_y}) must match rendered prompt ink center ({rendered_prompt_center_y})"
+            );
+        })
+        .textures_delta
+        .clear();
+    }
+
+    #[test]
+    fn test_subwindow_drag_does_not_select_background_and_inactive_pane_blocked() {
+        let ctx = egui::Context::default();
+        let settings = ThemeSettings::default();
+        settings.apply_fonts(&ctx);
+        let menus = MenuManager::new();
+        let tile_id = egui_tiles::TileId::from_u64(1);
+        let mut pane = make_test_pane();
+
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0));
+
+        // 1. Simulate dragging a sub-window titlebar while pointer is captured by sub-window:
+        //    selection on the background pane must NOT be triggered.
+        let mut raw_press = egui::RawInput::default();
+        raw_press.screen_rect = Some(screen);
+        let start_pos = egui::pos2(100.0, 80.0);
+        raw_press.events.push(egui::Event::PointerMoved(start_pos));
+        raw_press.events.push(egui::Event::PointerButton {
+            pos: start_pos,
+            button: egui::PointerButton::Primary,
+            pressed: true,
+            modifiers: egui::Modifiers::NONE,
+        });
+        ctx.run_ui(raw_press, |ui| {
+            pane.ui(
+                ui,
+                tile_id,
+                &menus,
+                &settings,
+                true,
+                true,
+                false,
+                true, // prefs_capturing_pointer = true (dragging subwindow titlebar)
+                false,
+                true, // workspace_dragging = true
+                1.0,
+            );
+        })
+        .textures_delta
+        .clear();
+
+        let mut raw_drag = egui::RawInput::default();
+        raw_drag.screen_rect = Some(screen);
+        let drag_pos = egui::pos2(240.0, 120.0);
+        raw_drag.events.push(egui::Event::PointerMoved(drag_pos));
+        ctx.run_ui(raw_drag, |ui| {
+            pane.ui(
+                ui,
+                tile_id,
+                &menus,
+                &settings,
+                true,
+                true,
+                false,
+                true,
+                false,
+                true,
+                1.0,
+            );
+        })
+        .textures_delta
+        .clear();
+
+        assert!(
+            pane.selection_start.is_none() && pane.selection_end.is_none(),
+            "Dragging a sub-window titlebar must never trigger text selection on the background panel"
+        );
+
+        // Release mouse button
+        let mut raw_release = egui::RawInput::default();
+        raw_release.screen_rect = Some(screen);
+        raw_release.events.push(egui::Event::PointerButton {
+            pos: drag_pos,
+            button: egui::PointerButton::Primary,
+            pressed: false,
+            modifiers: egui::Modifiers::NONE,
+        });
+        ctx.run_ui(raw_release, |ui| {
+            pane.ui(
+                ui,
+                tile_id,
+                &menus,
+                &settings,
+                true,
+                true,
+                false,
+                false,
+                false,
+                false,
+                1.0,
+            );
+        })
+        .textures_delta
+        .clear();
+
+        // 2. While a pane is inactive (is_focused = false), dragging on it must NOT select text.
+        let mut raw_inactive_press = egui::RawInput::default();
+        raw_inactive_press.screen_rect = Some(screen);
+        raw_inactive_press.events.push(egui::Event::PointerMoved(start_pos));
+        raw_inactive_press.events.push(egui::Event::PointerButton {
+            pos: start_pos,
+            button: egui::PointerButton::Primary,
+            pressed: true,
+            modifiers: egui::Modifiers::NONE,
+        });
+        ctx.run_ui(raw_inactive_press, |ui| {
+            pane.ui(
+                ui,
+                tile_id,
+                &menus,
+                &settings,
+                false, // inactive pane
+                true,
+                false,
+                false,
+                false,
+                false,
+                1.0,
+            );
+        })
+        .textures_delta
+        .clear();
+
+        let mut raw_inactive_drag = egui::RawInput::default();
+        raw_inactive_drag.screen_rect = Some(screen);
+        raw_inactive_drag.events.push(egui::Event::PointerMoved(drag_pos));
+        ctx.run_ui(raw_inactive_drag, |ui| {
+            pane.ui(
+                ui,
+                tile_id,
+                &menus,
+                &settings,
+                false, // still inactive during drag
+                true,
+                false,
+                false,
+                false,
+                false,
+                1.0,
+            );
+        })
+        .textures_delta
+        .clear();
+
+        assert!(
+            pane.selection_start.is_none() && pane.selection_end.is_none(),
+            "Inactive background panel must not allow text range selection"
+        );
+
+        // 3. When another screen is open (other_screen_open = true), even the focused pane
+        //    must ignore clicks, drags, and keyboard shortcuts.
+        let mut raw_other_open = egui::RawInput::default();
+        raw_other_open.screen_rect = Some(screen);
+        raw_other_open.events.push(egui::Event::PointerMoved(start_pos));
+        raw_other_open.events.push(egui::Event::PointerButton {
+            pos: start_pos,
+            button: egui::PointerButton::Primary,
+            pressed: true,
+            modifiers: egui::Modifiers::NONE,
+        });
+        raw_other_open.events.push(egui::Event::Key {
+            key: egui::Key::H,
+            physical_key: Some(egui::Key::H),
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::CTRL | egui::Modifiers::SHIFT,
+        });
+        let mut out = PaneUiOutput {
+            action: None,
+            start_tile_drag: false,
+            clicked_or_focused: false,
+        };
+        ctx.run_ui(raw_other_open, |ui| {
+            out = pane.ui(
+                ui,
+                tile_id,
+                &menus,
+                &settings,
+                true, // focused pane
+                true,
+                true, // other_screen_open = true
+                false,
+                false,
+                false,
+                1.0,
+            );
+        })
+        .textures_delta
+        .clear();
+
+        assert!(
+            out.action.is_none() && !out.start_tile_drag && !out.clicked_or_focused,
+            "Pane must not respond to clicks or shortcuts while another screen is open"
+        );
+    }
+
+    #[test]
+    fn test_custom_shortcut_configuration() {
+        let mut pane = make_test_pane();
+        let ctx = egui::Context::default();
+        let mut shortcuts = ShortcutSettings::default();
+        shortcuts.split_horizontal = "Alt+H".to_string();
+
+        let mut raw = egui::RawInput::default();
+        raw.events.push(egui::Event::Key {
+            key: egui::Key::H,
+            physical_key: Some(egui::Key::H),
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::ALT,
+        });
+        let mut action = None;
+        ctx.run_ui(raw, |ui| {
+            action = pane.handle_shortcut_keyboard_input(ui, &shortcuts);
+        })
+        .textures_delta
+        .clear();
+        assert_eq!(action, Some(TitleBarAction::SplitHorizontal));
     }
 }
