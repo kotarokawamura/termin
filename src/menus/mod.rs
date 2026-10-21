@@ -50,17 +50,7 @@ impl MenuManager {
     ) -> Option<(MenuContext, MenuAction)> {
         let kind = ctx.kind();
         let mut entries = presets::default_entries_for(kind, shortcuts);
-
-        // プラグインから登録されたメニューがあれば末尾に追加
-        if let Some(extra) = self.plugin_entries.get(&kind) {
-            if !extra.is_empty() {
-                if !entries.is_empty() {
-                    entries.push(MenuEntry::Separator);
-                }
-                entries.extend(extra.iter().cloned());
-            }
-        }
-
+        
         // 描画してクリックされたアクションがあれば、どの画面(MenuContext)で起きたかとセットで返す
         renderer::render_context_menu(response, &entries).map(|action| (ctx, action))
     }

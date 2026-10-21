@@ -185,8 +185,10 @@ impl TerminalPane {
         } else {
             egui::Sense::CLICK
         };
+
         let term_resp = ui.interact(rect, canvas_id, canvas_sense);
         let scrollbar_resp = ui.interact(scrollbar_rect, scrollbar_id, canvas_sense);
+
         if !blocked_by_other_screen
             && !popup_open
             && !any_dragging
@@ -353,39 +355,39 @@ impl TerminalPane {
 
         // 3. Context menu for the terminal screen canvas (only when active and no other window/screen is open)
         let mut menu_action_output = None;
-        if !blocked_by_other_screen && (is_focused || popup_open) {
-            if let Some((_ctx, menu_action)) =
-                menus.show(&term_resp, MenuContext::Pane(tile_id), &settings.shortcuts)
-            {
-                clicked_or_focused = true;
-                match menu_action {
-                    MenuAction::Copy => {
-                        self.copy_selection_or_screen(ui.ctx());
-                    }
-                    MenuAction::Paste => {
-                        self.pending_paste = true;
-                        ui.ctx().send_viewport_cmd(egui::ViewportCommand::RequestPaste);
-                    }
-                    MenuAction::SplitHorizontal => {
-                        menu_action_output = Some(TitleBarAction::SplitHorizontal);
-                    }
-                    MenuAction::SplitVertical => {
-                        menu_action_output = Some(TitleBarAction::SplitVertical);
-                    }
-                    MenuAction::NewTab => {
-                        menu_action_output = Some(TitleBarAction::NewTab);
-                    }
-                    MenuAction::ClearScrollback => {
-                        self.backend.clear_scrollback();
-                    }
-                    MenuAction::ClosePane => {
-                        menu_action_output = Some(TitleBarAction::ClosePane);
-                    }
-                    MenuAction::OpenSettings => {
-                        menu_action_output = Some(TitleBarAction::OpenPreferences);
-                    }
-                    _ => {}
+
+        //if !blocked_by_other_screen && (is_focused || popup_open) {}
+        if let Some((_ctx, menu_action)) =
+            menus.show(&term_resp, MenuContext::Pane(tile_id), &settings.shortcuts)
+        {
+            clicked_or_focused = true;
+            match menu_action {
+                MenuAction::Copy => {
+                    self.copy_selection_or_screen(ui.ctx());
                 }
+                MenuAction::Paste => {
+                    self.pending_paste = true;
+                    ui.ctx().send_viewport_cmd(egui::ViewportCommand::RequestPaste);
+                }
+                MenuAction::SplitHorizontal => {
+                    menu_action_output = Some(TitleBarAction::SplitHorizontal);
+                }
+                MenuAction::SplitVertical => {
+                    menu_action_output = Some(TitleBarAction::SplitVertical);
+                }
+                MenuAction::NewTab => {
+                    menu_action_output = Some(TitleBarAction::NewTab);
+                }
+                MenuAction::ClearScrollback => {
+                    self.backend.clear_scrollback();
+                }
+                MenuAction::ClosePane => {
+                    menu_action_output = Some(TitleBarAction::ClosePane);
+                }
+                MenuAction::OpenSettings => {
+                    menu_action_output = Some(TitleBarAction::OpenPreferences);
+                }
+                _ => {}
             }
         }
 
