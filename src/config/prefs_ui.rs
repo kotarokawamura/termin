@@ -1154,40 +1154,7 @@ fn color_row(
     changed
 }
 
+
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_font_sample_catalog_does_not_panic_on_lazy_load() {
-        let ctx = egui::Context::default();
-        let mut settings = ThemeSettings::default();
-        settings.apply_fonts(&ctx);
-
-        let mut prefs = PreferencesWindow::default();
-        prefs.open = true;
-        prefs.active_tab = PrefsTab::Font;
-        prefs.font_sample_window_open = true;
-
-        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1024.0, 768.0));
-
-        // Run several frames so lazy font loading triggers in frame 0 and binds in subsequent frames
-        for _ in 0..4 {
-            let mut raw = egui::RawInput::default();
-            raw.screen_rect = Some(screen);
-            ctx.run_ui(raw, |ui| {
-                let ctx_clone = ui.ctx().clone();
-                prefs.ui(&ctx_clone, &mut settings);
-            })
-            .textures_delta
-            .clear();
-        }
-
-        if !prefs.available_fonts.is_empty() {
-            assert!(
-                !prefs.loaded_preview_fonts.is_empty(),
-                "At least one system font preview should be loaded"
-            );
-        }
-    }
-}
+#[path = "test/prefs_ui_tests.rs"]
+mod tests;
