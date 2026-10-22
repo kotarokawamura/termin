@@ -73,13 +73,22 @@ pub fn render_titlebar(
         *editing_title = false;
     }
 
+    let canvas_id = egui::Id::new(("term_canvas", tile_id));
+    let scrollbar_id = egui::Id::new(("term_scrollbar", tile_id));
     let popup_open = egui::Popup::is_any_open(ui.ctx());
-    let any_drag_in_progress = ui.ctx().dragged_id().is_some();
+
+    // Ignore drags originating from this pane's own terminal canvas or scrollbar
+    let external_drag_in_progress = ui
+        .ctx()
+        .dragged_id()
+        .is_some_and(|id| id != canvas_id && id != scrollbar_id);
+
     let is_effectively_active =
-        is_active && !other_screen_open && !popup_open && !any_drag_in_progress;
+        is_active && !other_screen_open && !popup_open && !external_drag_in_progress;
 
     let bar_height = 24.0;
     let desired_size = egui::vec2(ui.available_width(), bar_height);
+
     let bar_sense = if *editing_title || other_screen_open || popup_open {
         egui::Sense::hover()
     } else if is_effectively_active {
@@ -116,6 +125,7 @@ pub fn render_titlebar(
     } else {
         egui::Sense::CLICK
     };
+
     let grip_btn = egui::Button::new(egui::RichText::new(" ✥ ").color(fg_color).size(12.0))
         .frame(false)
         .sense(grip_sense);
@@ -170,6 +180,7 @@ pub fn render_titlebar(
         btn_sense,
         &tr("Add a new tab in this pane"),
     );
+
     if !other_screen_open && !popup_open && new_tab_resp.clicked() {
         if is_effectively_active {
             output.action = Some(TitleBarAction::NewTab);
@@ -200,7 +211,7 @@ pub fn render_titlebar(
                 btn_sense,
                 &tr("Maximize / Restore window"),
             )
-            .clicked()
+                .clicked()
                 && !other_screen_open
                 && !popup_open
             {
@@ -242,7 +253,7 @@ pub fn render_titlebar(
             btn_sense,
             &tr("Open CustomDragBar Preferences"),
         )
-        .clicked()
+            .clicked()
             && !other_screen_open
             && !popup_open
         {
@@ -293,8 +304,8 @@ pub fn render_titlebar(
                 edit_resp.request_focus();
             } else if edit_resp.lost_focus()
                 || ui.input(|i| {
-                    i.key_pressed(egui::Key::Enter) || i.key_pressed(egui::Key::Escape)
-                })
+                i.key_pressed(egui::Key::Enter) || i.key_pressed(egui::Key::Escape)
+            })
             {
                 *editing_title = false;
             }
@@ -325,9 +336,9 @@ pub fn render_titlebar(
                         .color(fg_color)
                         .size(12.0),
                 )
-                .truncate()
-                .sense(btn_sense)
-                .selectable(false),
+                    .truncate()
+                    .sense(btn_sense)
+                    .selectable(false),
             );
             #[cfg(test)]
             ui.ctx()
@@ -391,7 +402,8 @@ pub fn render_titlebar(
         }
     }
 
-    if ui.ctx().dragged_id().is_some() {
+    // Only set is_dragging if an external widget (not this pane's canvas/scrollbar) is being dragged
+    if external_drag_in_progress {
         output.is_dragging = true;
     }
 

@@ -124,15 +124,19 @@ impl TerminalPane {
         let canvas_id = egui::Id::new(("term_canvas", tile_id));
         let scrollbar_id = egui::Id::new(("term_scrollbar", tile_id));
         let window_focused = ui.input(|i| i.focused);
-        let other_widget_dragged = ui
-            .ctx()
-            .dragged_id()
-            .is_some_and(|id| id != canvas_id && id != scrollbar_id);
+
+        let dragged_id = ui.ctx().dragged_id();
+        let is_self_dragged =
+            dragged_id == Some(canvas_id) || dragged_id == Some(scrollbar_id);
+        let other_widget_dragged = dragged_id.is_some() && !is_self_dragged;
+
         let popup_open = egui::Popup::is_any_open(ui.ctx());
         let other_pane_editing_title = any_editing_title && !self.editing_title;
         let blocked_by_other_screen =
             other_screen_open || prefs_capturing_pointer || other_pane_editing_title;
-        let any_dragging = workspace_dragging || other_widget_dragged;
+
+        // Dragging inside this pane's own canvas or scrollbar keeps this pane active
+        let any_dragging = (workspace_dragging && !is_self_dragged) || other_widget_dragged;
         let visually_active = is_focused
             && window_focused
             && !popup_open
@@ -154,7 +158,15 @@ impl TerminalPane {
         if tb_out.clicked && !blocked_by_other_screen && !popup_open {
             clicked_or_focused = true;
         }
-        let any_dragging = any_dragging || tb_out.is_dragging || tb_out.start_tile_drag;
+
+        let any_dragging =
+            any_dragging || ((tb_out.is_dragging || tb_out.start_tile_drag) && !is_self_dragged);
+        let visually_active = is_focused
+            && window_focused
+            && !popup_open
+            && !any_dragging
+            && !blocked_by_other_screen;
+
         if any_dragging || blocked_by_other_screen || popup_open || !visually_active {
             self.select_anchor_pos = None;
         }
@@ -193,7 +205,10 @@ impl TerminalPane {
             && !popup_open
             && !any_dragging
             && !pointer_over_floating
-            && (term_resp.clicked() || scrollbar_resp.clicked())
+            && (term_resp.clicked()
+            || term_resp.drag_started()
+            || scrollbar_resp.clicked()
+            || scrollbar_resp.drag_started())
         {
             clicked_or_focused = true;
         }
@@ -281,7 +296,11 @@ impl TerminalPane {
         let primary_pressed = ui.input(|i| i.pointer.button_pressed(egui::PointerButton::Primary));
         let primary_down = ui.input(|i| i.pointer.button_down(egui::PointerButton::Primary));
         let primary_released = ui.input(|i| i.pointer.button_released(egui::PointerButton::Primary));
-        let pointer_pos = ui.input(|i| i.pointer.interact_pos());
+        let pointer_pos = ui.input(|i| {
+            i.pointer
+                .interact_pos()
+                .or_else(|| i.pointer.latest_pos())
+        });
 
         if primary_pressed && can_select_text {
             if let Some(pos) = pointer_pos {
@@ -356,7 +375,6 @@ impl TerminalPane {
         // 3. Context menu for the terminal screen canvas (only when active and no other window/screen is open)
         let mut menu_action_output = None;
 
-        //if !blocked_by_other_screen && (is_focused || popup_open) {}
         if let Some((_ctx, menu_action)) =
             menus.show(&term_resp, MenuContext::Pane(tile_id), &settings.shortcuts)
         {
@@ -1003,7 +1021,6 @@ impl TerminalPane {
         action
     }
 }
-
 
 #[cfg(test)]
 #[path = "test/pane_tests.rs"]
