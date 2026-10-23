@@ -442,7 +442,9 @@ impl<'a> egui_tiles::Behavior<TerminalPane> for TreeBehavior<'a> {
                 }
             }
 
-            if output.start_tile_drag && is_focused && self.window_focused && !self.popup_open {
+            // Allow starting a tile drag from any pane's titlebar grip (focuses and drags immediately)
+            if output.start_tile_drag && !self.popup_open {
+                *self.focused_tile = Some(tile_id);
                 return UiResponse::DragStarted;
             }
         }
@@ -454,13 +456,11 @@ impl<'a> egui_tiles::Behavior<TerminalPane> for TreeBehavior<'a> {
         pane.title.clone().into()
     }
 
-    fn is_tile_draggable(&self, _tiles: &Tiles<TerminalPane>, tile_id: TileId) -> bool {
+    fn is_tile_draggable(&self, _tiles: &Tiles<TerminalPane>, _tile_id: TileId) -> bool {
         !self.other_screen_open
             && !self.popup_open
             && !self.prefs_capturing_pointer
             && !self.any_editing_title
-            && self.window_focused
-            && *self.focused_tile == Some(tile_id)
     }
 
     fn is_container_resizable(&self, _tiles: &Tiles<TerminalPane>, _tile_id: TileId) -> bool {

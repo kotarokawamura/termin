@@ -121,29 +121,33 @@ impl TerminalPane {
     ) -> PaneUiOutput {
         let mut clicked_or_focused = false;
 
+        let pane_rect = ui.max_rect();
         let canvas_id = egui::Id::new(("term_canvas", tile_id));
         let scrollbar_id = egui::Id::new(("term_scrollbar", tile_id));
         let window_focused = ui.input(|i| i.focused);
 
-        let dragged_id = ui.ctx().dragged_id();
-        let is_self_dragged =
-            dragged_id == Some(canvas_id) || dragged_id == Some(scrollbar_id);
-        let other_widget_dragged = dragged_id.is_some() && !is_self_dragged;
+        // Treat a drag as external ONLY if it started outside this pane's bounding rect.
+        let external_widget_dragged = ui.ctx().dragged_id().is_some_and(|id| {
+            id != canvas_id
+                && id != scrollbar_id
+                && ui
+                .input(|i| i.pointer.press_origin())
+                .is_some_and(|origin| !pane_rect.contains(origin))
+        });
 
         let popup_open = egui::Popup::is_any_open(ui.ctx());
         let other_pane_editing_title = any_editing_title && !self.editing_title;
         let blocked_by_other_screen =
             other_screen_open || prefs_capturing_pointer || other_pane_editing_title;
 
-        // Dragging inside this pane's own canvas or scrollbar keeps this pane active
-        let any_dragging = (workspace_dragging && !is_self_dragged) || other_widget_dragged;
+        let any_dragging = workspace_dragging || external_widget_dragged;
         let visually_active = is_focused
             && window_focused
             && !popup_open
             && !any_dragging
             && !blocked_by_other_screen;
 
-        // 1. Render Terminator-style titlebar
+        // 1. Render Terminator-style titlebar (always interactive unless blocked by modal/popup)
         let tb_out = render_titlebar(
             ui,
             tile_id,
@@ -158,15 +162,7 @@ impl TerminalPane {
         if tb_out.clicked && !blocked_by_other_screen && !popup_open {
             clicked_or_focused = true;
         }
-
-        let any_dragging =
-            any_dragging || ((tb_out.is_dragging || tb_out.start_tile_drag) && !is_self_dragged);
-        let visually_active = is_focused
-            && window_focused
-            && !popup_open
-            && !any_dragging
-            && !blocked_by_other_screen;
-
+        let any_dragging = any_dragging || tb_out.is_dragging || tb_out.start_tile_drag;
         if any_dragging || blocked_by_other_screen || popup_open || !visually_active {
             self.select_anchor_pos = None;
         }
@@ -594,8 +590,9 @@ impl TerminalPane {
             );
         }
 
-        // Darken inactive/background panels so it is visually obvious they are disabled
-        let is_background_or_inactive = !visually_active || pane_context_menu_open;
+        // Darken inactive/background terminal canvas only (titlebar remains clear and operable)
+        let is_background_or_inactive =
+            !visually_active || pane_context_menu_open || tb_out.is_dragging;
         if is_background_or_inactive {
             painter.rect_filled(
                 full_rect,

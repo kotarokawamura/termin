@@ -73,35 +73,29 @@ pub fn render_titlebar(
         *editing_title = false;
     }
 
-    let canvas_id = egui::Id::new(("term_canvas", tile_id));
-    let scrollbar_id = egui::Id::new(("term_scrollbar", tile_id));
     let popup_open = egui::Popup::is_any_open(ui.ctx());
 
-    // Ignore drags originating from this pane's own terminal canvas or scrollbar
-    let external_drag_in_progress = ui
-        .ctx()
-        .dragged_id()
-        .is_some_and(|id| id != canvas_id && id != scrollbar_id);
+    // Titlebar controls remain interactive regardless of whether the pane is active or inactive,
+    // unless a modal/preferences window or popup menu is blocking input.
+    let can_interact = !other_screen_open && !popup_open;
 
-    let is_effectively_active =
-        is_active && !other_screen_open && !popup_open && !external_drag_in_progress;
+    // Visual active color reflects pane focus state
+    let visual_active = is_active && !other_screen_open && !popup_open;
 
     let bar_height = 24.0;
     let desired_size = egui::vec2(ui.available_width(), bar_height);
 
-    let bar_sense = if *editing_title || other_screen_open || popup_open {
+    let bar_sense = if *editing_title || !can_interact {
         egui::Sense::hover()
-    } else if is_effectively_active {
-        egui::Sense::click_and_drag()
     } else {
-        egui::Sense::CLICK
+        egui::Sense::click_and_drag()
     };
     let (bar_rect, bar_resp) = ui.allocate_exact_size(desired_size, bar_sense);
 
     // Reserve background shape slot so we can color it after detecting any drag/menu state this frame
     let bg_shape_idx = ui.painter().add(egui::Shape::Noop);
 
-    let fg_color = settings.titlebar_fg(is_effectively_active);
+    let fg_color = settings.titlebar_fg(visual_active);
 
     let mut child_ui = ui.new_child(
         egui::UiBuilder::new()
@@ -111,17 +105,17 @@ pub fn render_titlebar(
 
     child_ui.spacing_mut().item_spacing = egui::vec2(3.0, 0.0);
 
-    let btn_sense = if other_screen_open || popup_open {
-        egui::Sense::hover()
-    } else {
+    let btn_sense = if can_interact {
         egui::Sense::CLICK
+    } else {
+        egui::Sense::hover()
     };
 
     // 1. Left controls: Drag grip [ ✥ ] for pane swap, plus split/tab buttons
-    let grip_sense = if other_screen_open || popup_open {
+    let grip_sense = if !can_interact {
         egui::Sense::hover()
-    } else if is_effectively_active && !*editing_title {
-        egui::Sense::DRAG
+    } else if !*editing_title {
+        egui::Sense::click_and_drag()
     } else {
         egui::Sense::CLICK
     };
@@ -133,15 +127,17 @@ pub fn render_titlebar(
         .add(grip_btn)
         .on_hover_text(tr("Drag and drop onto another pane to swap/split"));
 
-    if is_effectively_active && !*editing_title {
+    if can_interact && !*editing_title {
         if grip_resp.drag_started() {
             output.start_tile_drag = true;
             output.is_dragging = true;
             output.clicked = true;
         } else if grip_resp.dragged() {
             output.is_dragging = true;
+        } else if grip_resp.clicked() {
+            output.clicked = true;
         }
-    } else if !other_screen_open && !popup_open && grip_resp.clicked() {
+    } else if can_interact && grip_resp.clicked() {
         output.clicked = true;
     }
 
@@ -152,10 +148,8 @@ pub fn render_titlebar(
         btn_sense,
         &tr("Split Horizontally (Left/Right)"),
     );
-    if !other_screen_open && !popup_open && split_h_resp.clicked() {
-        if is_effectively_active {
-            output.action = Some(TitleBarAction::SplitHorizontal);
-        }
+    if can_interact && split_h_resp.clicked() {
+        output.action = Some(TitleBarAction::SplitHorizontal);
         output.clicked = true;
     }
 
@@ -166,10 +160,8 @@ pub fn render_titlebar(
         btn_sense,
         &tr("Split Vertically (Top/Bottom)"),
     );
-    if !other_screen_open && !popup_open && split_v_resp.clicked() {
-        if is_effectively_active {
-            output.action = Some(TitleBarAction::SplitVertical);
-        }
+    if can_interact && split_v_resp.clicked() {
+        output.action = Some(TitleBarAction::SplitVertical);
         output.clicked = true;
     }
 
@@ -181,10 +173,8 @@ pub fn render_titlebar(
         &tr("Add a new tab in this pane"),
     );
 
-    if !other_screen_open && !popup_open && new_tab_resp.clicked() {
-        if is_effectively_active {
-            output.action = Some(TitleBarAction::NewTab);
-        }
+    if can_interact && new_tab_resp.clicked() {
+        output.action = Some(TitleBarAction::NewTab);
         output.clicked = true;
     }
 
@@ -194,12 +184,9 @@ pub fn render_titlebar(
     let mut just_started_editing = false;
     child_ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
         if small_bar_button(ui, " × ", fg_color, btn_sense, &tr("Close this pane")).clicked()
-            && !other_screen_open
-            && !popup_open
+            && can_interact
         {
-            if is_effectively_active {
-                output.action = Some(TitleBarAction::ClosePane);
-            }
+            output.action = Some(TitleBarAction::ClosePane);
             output.clicked = true;
         }
 
@@ -212,33 +199,25 @@ pub fn render_titlebar(
                 &tr("Maximize / Restore window"),
             )
                 .clicked()
-                && !other_screen_open
-                && !popup_open
+                && can_interact
             {
-                if is_effectively_active {
-                    output.action = Some(TitleBarAction::ToggleMaximizeWindow);
-                }
+                output.action = Some(TitleBarAction::ToggleMaximizeWindow);
                 output.clicked = true;
             }
             if small_bar_button(ui, " — ", fg_color, btn_sense, &tr("Minimize window")).clicked()
-                && !other_screen_open
-                && !popup_open
+                && can_interact
             {
-                if is_effectively_active {
-                    output.action = Some(TitleBarAction::MinimizeWindow);
-                }
+                output.action = Some(TitleBarAction::MinimizeWindow);
                 output.clicked = true;
             }
         }
 
         let edit_btn_resp =
             small_bar_button(ui, " ✎ ", fg_color, btn_sense, &tr("Rename pane title"));
-        if !other_screen_open && !popup_open && edit_btn_resp.clicked() {
-            if is_effectively_active {
-                *editing_title = !*editing_title;
-                if *editing_title {
-                    just_started_editing = true;
-                }
+        if can_interact && edit_btn_resp.clicked() {
+            *editing_title = !*editing_title;
+            if *editing_title {
+                just_started_editing = true;
             }
             output.clicked = true;
         }
@@ -254,12 +233,9 @@ pub fn render_titlebar(
             &tr("Open CustomDragBar Preferences"),
         )
             .clicked()
-            && !other_screen_open
-            && !popup_open
+            && can_interact
         {
-            if is_effectively_active {
-                output.action = Some(TitleBarAction::OpenPreferences);
-            }
+            output.action = Some(TitleBarAction::OpenPreferences);
             output.clicked = true;
         }
 
@@ -343,8 +319,8 @@ pub fn render_titlebar(
             #[cfg(test)]
             ui.ctx()
                 .data_mut(|d| d.insert_temp(egui::Id::new("title_lbl_rect"), lbl_resp.rect));
-            if !other_screen_open && !popup_open {
-                if is_effectively_active && lbl_resp.double_clicked() {
+            if can_interact {
+                if lbl_resp.double_clicked() {
                     *editing_title = true;
                     output.clicked = true;
                 } else if lbl_resp.clicked() {
@@ -355,7 +331,7 @@ pub fn render_titlebar(
     });
 
     // 4. Context menu for the titlebar area (disabled when another window/screen is open)
-    if !other_screen_open && (is_active || popup_open) {
+    if !other_screen_open {
         if let Some((_ctx, menu_action)) =
             menus.show(&bar_resp, MenuContext::Titlebar(tile_id), &settings.shortcuts)
         {
@@ -382,29 +358,20 @@ pub fn render_titlebar(
         output.context_menu_open = true;
     }
 
-    // 5. Titlebar background interaction (Double-click = Maximize, Drag = Move Window — ONLY when active!)
-    if !other_screen_open && !popup_open && !*editing_title && !output.start_tile_drag && output.action.is_none() {
-        if is_effectively_active {
-            if bar_resp.double_clicked() {
-                output.action = Some(TitleBarAction::ToggleMaximizeWindow);
-                output.clicked = true;
-            } else if bar_resp.drag_started_by(egui::PointerButton::Primary) {
-                output.action = Some(TitleBarAction::StartWindowMove);
-                output.is_dragging = true;
-                output.clicked = true;
-            } else if bar_resp.dragged_by(egui::PointerButton::Primary) {
-                output.is_dragging = true;
-            } else if bar_resp.clicked() {
-                output.clicked = true;
-            }
+    // 5. Titlebar background interaction (Double-click = Maximize, Drag = Move Window, Click = Focus)
+    if can_interact && !*editing_title && !output.start_tile_drag && output.action.is_none() {
+        if bar_resp.double_clicked() {
+            output.action = Some(TitleBarAction::ToggleMaximizeWindow);
+            output.clicked = true;
+        } else if bar_resp.drag_started_by(egui::PointerButton::Primary) {
+            output.action = Some(TitleBarAction::StartWindowMove);
+            output.is_dragging = true;
+            output.clicked = true;
+        } else if bar_resp.dragged_by(egui::PointerButton::Primary) {
+            output.is_dragging = true;
         } else if bar_resp.clicked() {
             output.clicked = true;
         }
-    }
-
-    // Only set is_dragging if an external widget (not this pane's canvas/scrollbar) is being dragged
-    if external_drag_in_progress {
-        output.is_dragging = true;
     }
 
     let effective_active =
