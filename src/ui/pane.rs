@@ -32,9 +32,8 @@ pub fn default_shell_title() -> String {
 
 pub struct PaneUiOutput {
     pub action: Option<TitleBarAction>,
-    pub start_tile_drag: bool,
+    pub toggle_tile_move: bool,
     pub clicked_or_focused: bool,
-    pub drag_stopped: bool,
 }
 
 const SCROLLBAR_WIDTH: f32 = 10.0;
@@ -117,7 +116,7 @@ impl TerminalPane {
         other_screen_open: bool,
         prefs_capturing_pointer: bool,
         any_editing_title: bool,
-        workspace_dragging: bool,
+        moving_tile: Option<TileId>,
         external_zoom_delta: f32,
     ) -> PaneUiOutput {
         let mut clicked_or_focused = false;
@@ -127,40 +126,31 @@ impl TerminalPane {
         let scrollbar_id = egui::Id::new(("term_scrollbar", tile_id));
         let window_focused = ui.input(|i| i.focused);
 
-        /*
-        // Treat a drag as external ONLY if it started outside this pane's bounding rect.
-        let external_widget_dragged = ui.ctx().dragged_id().is_some_and(|id| {
-            id != canvas_id
-                && id != scrollbar_id
-                && ui
-                .input(|i| i.pointer.press_origin())
-                .is_some_and(|origin| !pane_rect.contains(origin))
-        });
-        */
-
         let popup_open = egui::Popup::is_any_open(ui.ctx());
         let other_pane_editing_title = any_editing_title && !self.editing_title;
         let blocked_by_other_screen =
             other_screen_open || prefs_capturing_pointer || other_pane_editing_title;
 
-        //let any_dragging = workspace_dragging || external_widget_dragged;
+        let is_moving_this_tile = moving_tile == Some(tile_id);
+        let any_tile_moving = moving_tile.is_some();
 
-        // 1. Render Terminator-style titlebar first so we know its drag state
-        let initial_visually_active = is_focused
+        let visually_active = (is_focused || is_moving_this_tile)
             && window_focused
             && !popup_open
-            //&& !any_dragging
             && !blocked_by_other_screen;
 
+        // 1. Render Terminator-style titlebar
         let tb_out = render_titlebar(
             ui,
             tile_id,
             menus,
             &mut self.title,
             &mut self.editing_title,
-            initial_visually_active,
+            visually_active,
             is_top_right,
             blocked_by_other_screen,
+            is_moving_this_tile,
+            any_tile_moving,
             settings,
         );
 
@@ -168,20 +158,7 @@ impl TerminalPane {
             clicked_or_focused = true;
         }
 
-        // If this pane's titlebar is being dragged or just dropped, keep it visually active
-        let is_self_dragging = tb_out.is_dragging || tb_out.start_tile_drag || tb_out.drag_stopped;
-        if tb_out.drag_stopped {
-            clicked_or_focused = true;
-            ui.ctx().memory_mut(|m| m.request_focus(canvas_id));
-        }
-
-        let visually_active = (is_focused || is_self_dragging)
-            && window_focused
-            && !popup_open
-            && !blocked_by_other_screen;
-
-        //let any_dragging = any_dragging || is_self_dragging;
-        if /*any_dragging ||*/ blocked_by_other_screen || popup_open || !visually_active {
+        if blocked_by_other_screen || popup_open || !visually_active || any_tile_moving {
             self.select_anchor_pos = None;
         }
 
@@ -206,7 +183,7 @@ impl TerminalPane {
 
         let canvas_sense = if blocked_by_other_screen || popup_open || pointer_over_floating {
             egui::Sense::hover()
-        } else if visually_active /*&& !any_dragging*/ {
+        } else if visually_active && !any_tile_moving {
             egui::Sense::click_and_drag()
         } else {
             egui::Sense::CLICK
@@ -217,12 +194,16 @@ impl TerminalPane {
 
         if !blocked_by_other_screen
             && !popup_open
-            //&& !any_dragging
             && !pointer_over_floating
             && (term_resp.clicked()
             || term_resp.drag_started()
             || scrollbar_resp.clicked()
-            || scrollbar_resp.drag_started())
+            || scrollbar_resp.drag_started()
+            || (any_tile_moving
+            && ui.input(|i| i.pointer.button_pressed(egui::PointerButton::Primary))
+            && ui
+            .input(|i| i.pointer.interact_pos())
+            .is_some_and(|p| pane_rect.contains(p))))
         {
             clicked_or_focused = true;
         }
@@ -238,7 +219,7 @@ impl TerminalPane {
         });
 
         // Pinch-out and pinch-in zoom gestures on the active panel
-        let zoom_delta = if visually_active && !self.editing_title /*&& !any_dragging*/ {
+        let zoom_delta = if visually_active && !self.editing_title && !any_tile_moving {
             let mut zd = ui.input(|i| i.zoom_delta());
             zd *= external_zoom_delta;
             if super_held && pane_hovered {
@@ -260,9 +241,6 @@ impl TerminalPane {
         let font_id = egui::FontId::monospace(term_font_size);
         let char_w = (term_font_size * 0.6).max(4.0);
 
-        // Measure actual rendered glyph bounds of a representative shell prompt ("hk~$日")
-        // so the cell rect and cursor highlight are vertically centered on the visible glyph ink
-        // rather than skewed upwards by CJK font ascent leading.
         let ref_galley = ui.painter().layout_no_wrap(
             "hk~$日".to_string(),
             font_id.clone(),
@@ -292,7 +270,7 @@ impl TerminalPane {
             self.session.resize(new_rows, new_cols);
         }
 
-        // Handle mouse drag selection on the terminal grid (only when active and not dragging windows/titlebars)
+        // Handle mouse drag selection on the terminal grid
         let (rows, cols) = self.backend.size();
         let pos_to_cell = |pos: egui::Pos2| -> (u16, u16) {
             let rel_x = (pos.x - (rect.min.x + pad)).max(0.0);
@@ -304,7 +282,7 @@ impl TerminalPane {
 
         let can_select_text = visually_active
             && !self.editing_title
-            //&& !any_dragging
+            && !any_tile_moving
             && !pointer_over_floating;
 
         let primary_pressed = ui.input(|i| i.pointer.button_pressed(egui::PointerButton::Primary));
@@ -337,11 +315,11 @@ impl TerminalPane {
             self.select_anchor_pos = None;
         }
 
-        // Handle mouse wheel / touchpad scrollback when hovering over this active pane or its scrollbar
+        // Handle mouse wheel / touchpad scrollback
         if visually_active
             && !self.editing_title
             && pane_hovered
-            //&& !any_dragging
+            && !any_tile_moving
             && !super_held
             && (zoom_delta - 1.0).abs() <= 0.001
         {
@@ -357,7 +335,7 @@ impl TerminalPane {
             }
         }
 
-        // Handle interactive scrollbar click/drag (only when pane is active)
+        // Handle interactive scrollbar click/drag
         let max_scroll = self.backend.max_scroll_offset();
         let total_lines = (rows as usize) + max_scroll;
         let track_pad = 2.0_f32;
@@ -372,7 +350,7 @@ impl TerminalPane {
 
         if visually_active
             && !self.editing_title
-            //&& !any_dragging
+            && !any_tile_moving
             && !pointer_over_floating
             && max_scroll > 0
             && (scrollbar_resp.clicked() || scrollbar_resp.dragged())
@@ -386,40 +364,42 @@ impl TerminalPane {
             }
         }
 
-        // 3. Context menu for the terminal screen canvas (only when active and no other window/screen is open)
+        // 3. Context menu for the terminal screen canvas
         let mut menu_action_output = None;
 
-        if let Some((_ctx, menu_action)) =
-            menus.show(&term_resp, MenuContext::Pane(tile_id), &settings.shortcuts)
-        {
-            clicked_or_focused = true;
-            match menu_action {
-                MenuAction::Copy => {
-                    self.copy_selection_or_screen(ui.ctx());
+        if !any_tile_moving {
+            if let Some((_ctx, menu_action)) =
+                menus.show(&term_resp, MenuContext::Pane(tile_id), &settings.shortcuts)
+            {
+                clicked_or_focused = true;
+                match menu_action {
+                    MenuAction::Copy => {
+                        self.copy_selection_or_screen(ui.ctx());
+                    }
+                    MenuAction::Paste => {
+                        self.pending_paste = true;
+                        ui.ctx().send_viewport_cmd(egui::ViewportCommand::RequestPaste);
+                    }
+                    MenuAction::SplitHorizontal => {
+                        menu_action_output = Some(TitleBarAction::SplitHorizontal);
+                    }
+                    MenuAction::SplitVertical => {
+                        menu_action_output = Some(TitleBarAction::SplitVertical);
+                    }
+                    MenuAction::NewTab => {
+                        menu_action_output = Some(TitleBarAction::NewTab);
+                    }
+                    MenuAction::ClearScrollback => {
+                        self.backend.clear_scrollback();
+                    }
+                    MenuAction::ClosePane => {
+                        menu_action_output = Some(TitleBarAction::ClosePane);
+                    }
+                    MenuAction::OpenSettings => {
+                        menu_action_output = Some(TitleBarAction::OpenPreferences);
+                    }
+                    _ => {}
                 }
-                MenuAction::Paste => {
-                    self.pending_paste = true;
-                    ui.ctx().send_viewport_cmd(egui::ViewportCommand::RequestPaste);
-                }
-                MenuAction::SplitHorizontal => {
-                    menu_action_output = Some(TitleBarAction::SplitHorizontal);
-                }
-                MenuAction::SplitVertical => {
-                    menu_action_output = Some(TitleBarAction::SplitVertical);
-                }
-                MenuAction::NewTab => {
-                    menu_action_output = Some(TitleBarAction::NewTab);
-                }
-                MenuAction::ClearScrollback => {
-                    self.backend.clear_scrollback();
-                }
-                MenuAction::ClosePane => {
-                    menu_action_output = Some(TitleBarAction::ClosePane);
-                }
-                MenuAction::OpenSettings => {
-                    menu_action_output = Some(TitleBarAction::OpenPreferences);
-                }
-                _ => {}
             }
         }
 
@@ -429,13 +409,12 @@ impl TerminalPane {
             || egui::Popup::is_any_open(ui.ctx()));
         let can_interact = visually_active
             && !self.editing_title
-            //&& !any_dragging
+            && !any_tile_moving
             && !pane_context_menu_open;
 
         // Forward keyboard events to PTY when this pane can be interacted with
         let mut shortcut_key_action = None;
         if can_interact {
-            // Ensure no stray egui widget holds focus while interacting with the terminal
             if let Some(focused_id) = ui.ctx().memory(|m| m.focused()) {
                 if focused_id != canvas_id {
                     ui.ctx().memory_mut(|m| m.surrender_focus(focused_id));
@@ -448,9 +427,7 @@ impl TerminalPane {
         let painter = ui.painter_at(full_rect);
         painter.rect_filled(full_rect, 0.0, egui::Color32::from_rgb(24, 24, 24));
 
-        // Draw cells in two passes:
-        // Pass 1: Backgrounds and selection highlights (prevents wide CJK glyphs from being clipped by the next cell's background)
-        // Pass 2: Foreground text glyphs and underlines
+        // Draw cells in two passes
         let (rows, cols) = self.backend.size();
         let norm_selection = self.normalized_selection();
 
@@ -541,7 +518,7 @@ impl TerminalPane {
             }
         }
 
-        // Draw cursor vertically centered with the shell prompt glyph ink
+        // Draw cursor
         let cursor = self.backend.cursor();
         let cursor_visually_active = visually_active && !pane_context_menu_open;
         if cursor.visible && cursor.row < rows && cursor.col < cols {
@@ -597,7 +574,6 @@ impl TerminalPane {
         };
         painter.rect_filled(thumb_rect, 3.0, thumb_color);
 
-        // Draw scrollback indicator badge if scrolled up into history
         if scroll_off > 0 {
             let badge_text = format!(" ↑ -{}/{} ", scroll_off, max_scroll.max(scroll_off));
             let badge_pos = egui::pos2(rect.max.x - 6.0, rect.min.y + 6.0);
@@ -610,22 +586,27 @@ impl TerminalPane {
             );
         }
 
-        // Darken inactive/background terminal canvas only (titlebar remains clear and operable)
-        let is_background_or_inactive =
-            !visually_active || pane_context_menu_open; //|| tb_out.is_dragging;
-        if is_background_or_inactive {
-            painter.rect_filled(
-                full_rect,
+        // Highlight border during pane move mode
+        if is_moving_this_tile {
+            painter.rect_stroke(
+                full_rect.shrink(1.5),
                 0.0,
-                egui::Color32::from_rgba_unmultiplied(0, 0, 0, 115),
+                egui::Stroke::new(2.0, egui::Color32::from_rgb(250, 204, 21)),
+                egui::StrokeKind::Inside,
+            );
+        } else if any_tile_moving && pointer_pos.is_some_and(|p| pane_rect.contains(p)) {
+            painter.rect_stroke(
+                full_rect.shrink(1.5),
+                0.0,
+                egui::Stroke::new(2.0, egui::Color32::from_rgb(80, 180, 255)),
+                egui::StrokeKind::Inside,
             );
         }
 
         PaneUiOutput {
             action: tb_out.action.or(shortcut_key_action).or(menu_action_output),
-            start_tile_drag: tb_out.start_tile_drag,
+            toggle_tile_move: tb_out.toggle_tile_move,
             clicked_or_focused,
-            drag_stopped: tb_out.drag_stopped,
         }
     }
 
@@ -672,7 +653,6 @@ impl TerminalPane {
                 return;
             }
         }
-        // Fallback: copy non-empty screen lines
         let (rows, cols) = self.backend.size();
         let mut lines = Vec::new();
         for r in 0..rows {
@@ -711,7 +691,6 @@ impl TerminalPane {
                     }
                     self.session.write_input(text.as_bytes());
                 }
-                // Paste event triggered by RequestPaste (context menu / Ctrl+Shift+V) or OS paste
                 egui::Event::Paste(text) => {
                     if self.pending_paste || shift_held {
                         self.pending_paste = false;
@@ -720,7 +699,6 @@ impl TerminalPane {
                         }
                         self.session.write_input(text.as_bytes());
                     } else {
-                        // Plain Ctrl+V (without Shift) sends literal-next (0x16) to PTY
                         self.session.write_input(&[0x16]);
                     }
                 }
@@ -746,7 +724,6 @@ impl TerminalPane {
 
         for event in events {
             match event {
-                // Note: egui-winit converts both Ctrl+C and Ctrl+Shift+C into Event::Copy
                 egui::Event::Copy => {
                     if shift_held || self.normalized_selection().is_some() {
                         self.copy_selection_or_screen(ui.ctx());
@@ -755,15 +732,14 @@ impl TerminalPane {
                             self.selection_end = None;
                         }
                     } else {
-                        self.session.write_input(&[0x03]); // Ctrl+C (SIGINT)
+                        self.session.write_input(&[0x03]);
                     }
                 }
-                // Note: egui-winit converts Ctrl+X / Ctrl+Shift+X into Event::Cut
                 egui::Event::Cut => {
                     if shift_held && self.normalized_selection().is_some() {
                         self.copy_selection_or_screen(ui.ctx());
                     } else if !shift_held {
-                        self.session.write_input(&[0x18]); // Ctrl+X
+                        self.session.write_input(&[0x18]);
                     }
                 }
                 egui::Event::Key {
@@ -773,7 +749,6 @@ impl TerminalPane {
                     modifiers,
                     ..
                 } => {
-                    // Check configurable user shortcuts first
                     if shortcut_matches_event(&shortcuts.copy, key, physical_key, modifiers, super_held) {
                         self.copy_selection_or_screen(ui.ctx());
                         continue;
@@ -830,7 +805,6 @@ impl TerminalPane {
                         continue;
                     }
 
-                    // Super+= / Super+- / Super+0 zoom shortcuts
                     if super_held || modifiers.mac_cmd {
                         match key {
                             egui::Key::Plus | egui::Key::Equals => {
@@ -929,7 +903,6 @@ impl TerminalPane {
                             _ => {}
                         }
 
-                        // Generic Ctrl + A..Z handling (0x01..0x1A)
                         let key_name = format!("{:?}", key);
                         if key_name.len() == 1 {
                             let ch = key_name.chars().next().unwrap();
@@ -945,9 +918,9 @@ impl TerminalPane {
                             }
                         } else {
                             match key {
-                                egui::Key::Space => self.session.write_input(&[0x00]), // Ctrl+Space (Emacs mark)
-                                egui::Key::Slash => self.session.write_input(&[0x1f]), // Ctrl+/ (Emacs undo)
-                                egui::Key::OpenBracket => self.session.write_input(&[0x1b]), // Ctrl+[ (ESC)
+                                egui::Key::Space => self.session.write_input(&[0x00]),
+                                egui::Key::Slash => self.session.write_input(&[0x1f]),
+                                egui::Key::OpenBracket => self.session.write_input(&[0x1b]),
                                 egui::Key::Backslash => self.session.write_input(&[0x1c]),
                                 egui::Key::CloseBracket => self.session.write_input(&[0x1d]),
                                 _ => {}
@@ -958,7 +931,6 @@ impl TerminalPane {
                             action = Some(TitleBarAction::SplitHorizontal);
                             continue;
                         }
-                        // Alt (Meta) key support for Emacs (e.g., M-x sends ESC + x)
                         let key_name = format!("{:?}", key);
                         if key_name.len() == 1 {
                             let ch = key_name.chars().next().unwrap().to_ascii_lowercase();
@@ -991,7 +963,7 @@ impl TerminalPane {
                                 ui.ctx().send_viewport_cmd(egui::ViewportCommand::RequestPaste);
                             }
                             egui::Key::Tab => {
-                                self.session.write_input(b"\x1b[Z"); // Shift+Tab (Backtab)
+                                self.session.write_input(b"\x1b[Z");
                             }
                             _ => {}
                         }

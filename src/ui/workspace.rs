@@ -34,7 +34,7 @@ pub struct Workspace {
     pub top_right_tile: Option<TileId>,
     pub next_pane_number: usize,
     recorded_rects: HashMap<TileId, egui::Rect>,
-    prev_dragged_tile: Option<TileId>,
+    pub moving_tile: Option<TileId>,
 }
 
 impl Workspace {
@@ -51,7 +51,7 @@ impl Workspace {
             top_right_tile: Some(first_id),
             next_pane_number: 2,
             recorded_rects: HashMap::new(),
-            prev_dragged_tile: None,
+            moving_tile: None,
         }
     }
 
@@ -89,30 +89,34 @@ impl Workspace {
         prefs_open: &mut bool,
         other_screen_open: bool,
         prefs_capturing_pointer: bool,
-        prefs_dragging: bool,
+        _prefs_dragging: bool,
         external_zoom_delta: f32,
     ) {
         self.recorded_rects.clear();
 
-        // シンプルにドラッグが終了した（離された）瞬間を検知
-        let current_dragged_id = self.tree.dragged_id(ctx);
-        if let Some(dragged_id) = self.prev_dragged_tile {
-            if current_dragged_id.is_none() {
-                if self.tree.tiles.get(dragged_id).is_some() {
-                    self.focused_tile = Some(dragged_id);
-                }
-            }
-        }
-        self.prev_dragged_tile = current_dragged_id;
-
         let window_focused = ui.input(|i| i.focused);
         let popup_open = egui::Popup::is_any_open(ctx);
+
+        // Cancel pane move mode if window loses focus, Escape is pressed, or another screen opens
+        if !window_focused
+            || other_screen_open
+            || popup_open
+            || ui.input(|i| i.key_pressed(egui::Key::Escape))
+        {
+            self.moving_tile = None;
+        }
+
+        if let Some(m_id) = self.moving_tile {
+            if self.tree.tiles.get(m_id).is_none() {
+                self.moving_tile = None;
+            }
+        }
+
         let any_editing_title = self
             .tree
             .tiles
             .iter()
             .any(|(_, tile)| matches!(tile, Tile::Pane(p) if p.editing_title));
-        let workspace_dragging = current_dragged_id.is_some() || prefs_dragging;
 
         let mut behavior = TreeBehavior {
             settings,
@@ -121,24 +125,50 @@ impl Workspace {
             top_right_tile: self.top_right_tile,
             recorded_rects: &mut self.recorded_rects,
             pending_action: None,
+            pending_move_toggle: None,
+            pending_move_target: None,
             prefs_open,
             other_screen_open,
             prefs_capturing_pointer,
             popup_open,
             window_focused,
             any_editing_title,
-            workspace_dragging,
+            moving_tile: self.moving_tile,
             external_zoom_delta,
         };
 
         self.tree.ui(&mut behavior, ui);
 
         let pending_action = behavior.pending_action;
+        let pending_move_toggle = behavior.pending_move_toggle;
+        let pending_move_target = behavior.pending_move_target;
+
+        // Handle pane move mode state transitions
+        if let Some(toggled_id) = pending_move_toggle {
+            if self.moving_tile == Some(toggled_id) {
+                // Clicked [ ✥ ] on the same pane again -> confirm at current position and keep active
+                self.moving_tile = None;
+                self.focused_tile = Some(toggled_id);
+            } else if let Some(src_id) = self.moving_tile {
+                // Clicked [ ✥ ] on another pane while already in move mode -> swap and activate moved pane
+                self.swap_panes(src_id, toggled_id);
+                self.moving_tile = None;
+            } else {
+                // Enter pane move mode
+                self.moving_tile = Some(toggled_id);
+                self.focused_tile = Some(toggled_id);
+            }
+        } else if let Some(target_id) = pending_move_target {
+            if let Some(src_id) = self.moving_tile {
+                self.swap_panes(src_id, target_id);
+                self.moving_tile = None;
+            }
+        }
 
         // Recompute the top-right pane from this frame's allocated rects
         self.update_top_right_tile();
 
-        // Execute deferred tree mutations (split, tab, focus nav, close, window controls, zoom, layout)
+        // Execute deferred tree mutations
         if let Some((tile_id, action)) = pending_action {
             match action {
                 TitleBarAction::ClosePane => {
@@ -176,6 +206,19 @@ impl Workspace {
                     ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(!is_max));
                 }
                 TitleBarAction::StartWindowMove => {
+                    // Clear egui's internal pointer-down & drag state before handing grab to OS compositor
+                    ctx.stop_dragging();
+                    let pos = ctx
+                        .input(|i| i.pointer.latest_pos())
+                        .unwrap_or(egui::Pos2::ZERO);
+                    ctx.input_mut(|i| {
+                        i.events.push(egui::Event::PointerButton {
+                            pos,
+                            button: egui::PointerButton::Primary,
+                            pressed: false,
+                            modifiers: egui::Modifiers::NONE,
+                        });
+                    });
                     ctx.send_viewport_cmd(egui::ViewportCommand::StartDrag);
                 }
                 TitleBarAction::OpenPreferences => {
@@ -204,6 +247,32 @@ impl Workspace {
         }
     }
 
+    /// Swap two panes in the tree and activate the moved pane at its new destination.
+    fn swap_panes(&mut self, src_id: TileId, dst_id: TileId) {
+        if src_id == dst_id {
+            self.focused_tile = Some(src_id);
+            return;
+        }
+        let src_tile = self.tree.tiles.remove(src_id);
+        let dst_tile = self.tree.tiles.remove(dst_id);
+        match (src_tile, dst_tile) {
+            (Some(s), Some(d)) => {
+                // Put the moved pane (`s`) into `dst_id` and `d` into `src_id`
+                self.tree.tiles.insert(dst_id, s);
+                self.tree.tiles.insert(src_id, d);
+                // The moved pane now lives at `dst_id`, so focus `dst_id`
+                self.focused_tile = Some(dst_id);
+            }
+            (Some(s), None) => {
+                self.tree.tiles.insert(src_id, s);
+            }
+            (None, Some(d)) => {
+                self.tree.tiles.insert(dst_id, d);
+            }
+            (None, None) => {}
+        }
+    }
+
     pub fn save_layout(&self) {
         if let Some(layout) = LayoutNode::from_tree(&self.tree) {
             let _ = layout.save_default();
@@ -218,6 +287,7 @@ impl Workspace {
             self.next_pane_number = next_num;
             self.focused_tile = first_pane;
             self.top_right_tile = first_pane;
+            self.moving_tile = None;
             self.recorded_rects.clear();
         }
     }
@@ -250,7 +320,6 @@ impl Workspace {
 
         self.focused_tile = Some(target_id);
 
-        // If the newly focused pane belongs to a Tabs container, make that tab active
         for (_, tile) in self.tree.tiles.iter_mut() {
             if let Tile::Container(Container::Tabs(tabs)) = tile {
                 if tabs.children.contains(&target_id) {
@@ -339,6 +408,9 @@ impl Workspace {
         if self.top_right_tile == Some(target_id) {
             self.top_right_tile = fallback_pane;
         }
+        if self.moving_tile == Some(target_id) {
+            self.moving_tile = None;
+        }
     }
 
     fn split_pane(&mut self, target_id: TileId, axis: SplitAxis) {
@@ -362,7 +434,6 @@ impl Workspace {
             )),
         };
 
-        // Put the new split container at `target_id` so parent links stay valid
         self.tree.tiles.insert(target_id, container_tile);
         self.focused_tile = Some(new_pane_id);
     }
@@ -373,7 +444,6 @@ impl Workspace {
         let new_pane = TerminalPane::new(id_num, &default_shell_title());
         let new_pane_id = self.tree.tiles.insert_pane(new_pane);
 
-        // If `target_id` is already inside a Tabs container, append the new tab there
         for (_, tile) in self.tree.tiles.iter_mut() {
             if let Tile::Container(Container::Tabs(tabs)) = tile {
                 if tabs.children.contains(&target_id) {
@@ -385,7 +455,6 @@ impl Workspace {
             }
         }
 
-        // Otherwise, wrap `target_id` and `new_pane_id` in a new Tabs container at `target_id`
         let Some(old_tile) = self.tree.tiles.remove(target_id) else {
             return;
         };
@@ -406,13 +475,15 @@ struct TreeBehavior<'a> {
     top_right_tile: Option<TileId>,
     recorded_rects: &'a mut HashMap<TileId, egui::Rect>,
     pending_action: Option<(TileId, TitleBarAction)>,
+    pending_move_toggle: Option<TileId>,
+    pending_move_target: Option<TileId>,
     prefs_open: &'a mut bool,
     other_screen_open: bool,
     prefs_capturing_pointer: bool,
     popup_open: bool,
     window_focused: bool,
     any_editing_title: bool,
-    workspace_dragging: bool,
+    moving_tile: Option<TileId>,
     external_zoom_delta: f32,
 }
 
@@ -438,31 +509,30 @@ impl<'a> egui_tiles::Behavior<TerminalPane> for TreeBehavior<'a> {
             self.other_screen_open,
             self.prefs_capturing_pointer,
             self.any_editing_title,
-            self.workspace_dragging,
+            self.moving_tile,
             self.external_zoom_delta,
         );
 
-        if !self.other_screen_open && !self.prefs_capturing_pointer {
-            if output.clicked_or_focused {
-                *self.focused_tile = Some(tile_id);
-            }
+        if !self.other_screen_open && !self.prefs_capturing_pointer && !self.popup_open {
+            if output.toggle_tile_move {
+                self.pending_move_toggle = Some(tile_id);
+            } else if self.moving_tile.is_some() {
+                if output.clicked_or_focused {
+                    self.pending_move_target = Some(tile_id);
+                }
+            } else {
+                if output.clicked_or_focused {
+                    *self.focused_tile = Some(tile_id);
+                }
 
-            if let Some(action) = output.action {
-                if matches!(action, TitleBarAction::OpenPreferences) {
-                    *self.prefs_open = true;
-                } else {
-                    self.pending_action = Some((tile_id, action));
+                if let Some(action) = output.action {
+                    if matches!(action, TitleBarAction::OpenPreferences) {
+                        *self.prefs_open = true;
+                    } else {
+                        self.pending_action = Some((tile_id, action));
+                    }
                 }
             }
-
-
-            /*
-            // Allow starting a tile drag from any pane's titlebar grip (focuses and drags immediately)
-            if output.start_tile_drag && !self.popup_open {
-                *self.focused_tile = Some(tile_id);
-                return UiResponse::DragStarted;
-            }
-            */
         }
 
         UiResponse::None
@@ -473,10 +543,8 @@ impl<'a> egui_tiles::Behavior<TerminalPane> for TreeBehavior<'a> {
     }
 
     fn is_tile_draggable(&self, _tiles: &Tiles<TerminalPane>, _tile_id: TileId) -> bool {
-        !self.other_screen_open
-            && !self.popup_open
-            && !self.prefs_capturing_pointer
-            && !self.any_editing_title
+        // Disable egui_tiles' built-in hold-drag in favor of click-to-move mode
+        false
     }
 
     fn is_container_resizable(&self, _tiles: &Tiles<TerminalPane>, _tile_id: TileId) -> bool {
@@ -484,6 +552,7 @@ impl<'a> egui_tiles::Behavior<TerminalPane> for TreeBehavior<'a> {
             && !self.popup_open
             && !self.prefs_capturing_pointer
             && !self.any_editing_title
+            && self.moving_tile.is_none()
             && self.window_focused
     }
 
