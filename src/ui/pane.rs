@@ -34,6 +34,7 @@ pub struct PaneUiOutput {
     pub action: Option<TitleBarAction>,
     pub start_tile_drag: bool,
     pub clicked_or_focused: bool,
+    pub drag_stopped: bool,
 }
 
 const SCROLLBAR_WIDTH: f32 = 10.0;
@@ -126,6 +127,7 @@ impl TerminalPane {
         let scrollbar_id = egui::Id::new(("term_scrollbar", tile_id));
         let window_focused = ui.input(|i| i.focused);
 
+        /*
         // Treat a drag as external ONLY if it started outside this pane's bounding rect.
         let external_widget_dragged = ui.ctx().dragged_id().is_some_and(|id| {
             id != canvas_id
@@ -134,36 +136,52 @@ impl TerminalPane {
                 .input(|i| i.pointer.press_origin())
                 .is_some_and(|origin| !pane_rect.contains(origin))
         });
+        */
 
         let popup_open = egui::Popup::is_any_open(ui.ctx());
         let other_pane_editing_title = any_editing_title && !self.editing_title;
         let blocked_by_other_screen =
             other_screen_open || prefs_capturing_pointer || other_pane_editing_title;
 
-        let any_dragging = workspace_dragging || external_widget_dragged;
-        let visually_active = is_focused
+        //let any_dragging = workspace_dragging || external_widget_dragged;
+
+        // 1. Render Terminator-style titlebar first so we know its drag state
+        let initial_visually_active = is_focused
             && window_focused
             && !popup_open
-            && !any_dragging
+            //&& !any_dragging
             && !blocked_by_other_screen;
 
-        // 1. Render Terminator-style titlebar (always interactive unless blocked by modal/popup)
         let tb_out = render_titlebar(
             ui,
             tile_id,
             menus,
             &mut self.title,
             &mut self.editing_title,
-            visually_active,
+            initial_visually_active,
             is_top_right,
             blocked_by_other_screen,
             settings,
         );
+
         if tb_out.clicked && !blocked_by_other_screen && !popup_open {
             clicked_or_focused = true;
         }
-        let any_dragging = any_dragging || tb_out.is_dragging || tb_out.start_tile_drag;
-        if any_dragging || blocked_by_other_screen || popup_open || !visually_active {
+
+        // If this pane's titlebar is being dragged or just dropped, keep it visually active
+        let is_self_dragging = tb_out.is_dragging || tb_out.start_tile_drag || tb_out.drag_stopped;
+        if tb_out.drag_stopped {
+            clicked_or_focused = true;
+            ui.ctx().memory_mut(|m| m.request_focus(canvas_id));
+        }
+
+        let visually_active = (is_focused || is_self_dragging)
+            && window_focused
+            && !popup_open
+            && !blocked_by_other_screen;
+
+        //let any_dragging = any_dragging || is_self_dragging;
+        if /*any_dragging ||*/ blocked_by_other_screen || popup_open || !visually_active {
             self.select_anchor_pos = None;
         }
 
@@ -188,7 +206,7 @@ impl TerminalPane {
 
         let canvas_sense = if blocked_by_other_screen || popup_open || pointer_over_floating {
             egui::Sense::hover()
-        } else if visually_active && !any_dragging {
+        } else if visually_active /*&& !any_dragging*/ {
             egui::Sense::click_and_drag()
         } else {
             egui::Sense::CLICK
@@ -199,7 +217,7 @@ impl TerminalPane {
 
         if !blocked_by_other_screen
             && !popup_open
-            && !any_dragging
+            //&& !any_dragging
             && !pointer_over_floating
             && (term_resp.clicked()
             || term_resp.drag_started()
@@ -220,7 +238,7 @@ impl TerminalPane {
         });
 
         // Pinch-out and pinch-in zoom gestures on the active panel
-        let zoom_delta = if visually_active && !self.editing_title && !any_dragging {
+        let zoom_delta = if visually_active && !self.editing_title /*&& !any_dragging*/ {
             let mut zd = ui.input(|i| i.zoom_delta());
             zd *= external_zoom_delta;
             if super_held && pane_hovered {
@@ -286,7 +304,7 @@ impl TerminalPane {
 
         let can_select_text = visually_active
             && !self.editing_title
-            && !any_dragging
+            //&& !any_dragging
             && !pointer_over_floating;
 
         let primary_pressed = ui.input(|i| i.pointer.button_pressed(egui::PointerButton::Primary));
@@ -323,7 +341,7 @@ impl TerminalPane {
         if visually_active
             && !self.editing_title
             && pane_hovered
-            && !any_dragging
+            //&& !any_dragging
             && !super_held
             && (zoom_delta - 1.0).abs() <= 0.001
         {
@@ -354,7 +372,7 @@ impl TerminalPane {
 
         if visually_active
             && !self.editing_title
-            && !any_dragging
+            //&& !any_dragging
             && !pointer_over_floating
             && max_scroll > 0
             && (scrollbar_resp.clicked() || scrollbar_resp.dragged())
@@ -411,15 +429,17 @@ impl TerminalPane {
             || egui::Popup::is_any_open(ui.ctx()));
         let can_interact = visually_active
             && !self.editing_title
-            && !pane_context_menu_open
-            && !any_dragging;
+            //&& !any_dragging
+            && !pane_context_menu_open;
 
         // Forward keyboard events to PTY when this pane can be interacted with
         let mut shortcut_key_action = None;
         if can_interact {
             // Ensure no stray egui widget holds focus while interacting with the terminal
             if let Some(focused_id) = ui.ctx().memory(|m| m.focused()) {
-                ui.ctx().memory_mut(|m| m.surrender_focus(focused_id));
+                if focused_id != canvas_id {
+                    ui.ctx().memory_mut(|m| m.surrender_focus(focused_id));
+                }
             }
             shortcut_key_action = self.handle_shortcut_keyboard_input(ui, &settings.shortcuts);
             self.handle_keyboard_input(ui, shortcut_key_action.is_some());
@@ -592,7 +612,7 @@ impl TerminalPane {
 
         // Darken inactive/background terminal canvas only (titlebar remains clear and operable)
         let is_background_or_inactive =
-            !visually_active || pane_context_menu_open || tb_out.is_dragging;
+            !visually_active || pane_context_menu_open; //|| tb_out.is_dragging;
         if is_background_or_inactive {
             painter.rect_filled(
                 full_rect,
@@ -605,6 +625,7 @@ impl TerminalPane {
             action: tb_out.action.or(shortcut_key_action).or(menu_action_output),
             start_tile_drag: tb_out.start_tile_drag,
             clicked_or_focused,
+            drag_stopped: tb_out.drag_stopped,
         }
     }
 

@@ -47,6 +47,7 @@ pub struct TitleBarOutput {
     pub clicked: bool,
     pub context_menu_open: bool,
     pub is_dragging: bool,
+    pub drag_stopped: bool,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -67,6 +68,7 @@ pub fn render_titlebar(
         clicked: false,
         context_menu_open: false,
         is_dragging: false,
+        drag_stopped: false,
     };
 
     if other_screen_open && *editing_title {
@@ -74,12 +76,7 @@ pub fn render_titlebar(
     }
 
     let popup_open = egui::Popup::is_any_open(ui.ctx());
-
-    // Titlebar controls remain interactive regardless of whether the pane is active or inactive,
-    // unless a modal/preferences window or popup menu is blocking input.
     let can_interact = !other_screen_open && !popup_open;
-
-    // Visual active color reflects pane focus state
     let visual_active = is_active && !other_screen_open && !popup_open;
 
     let bar_height = 24.0;
@@ -92,9 +89,7 @@ pub fn render_titlebar(
     };
     let (bar_rect, bar_resp) = ui.allocate_exact_size(desired_size, bar_sense);
 
-    // Reserve background shape slot so we can color it after detecting any drag/menu state this frame
     let bg_shape_idx = ui.painter().add(egui::Shape::Noop);
-
     let fg_color = settings.titlebar_fg(visual_active);
 
     let mut child_ui = ui.new_child(
@@ -111,7 +106,7 @@ pub fn render_titlebar(
         egui::Sense::hover()
     };
 
-    // 1. Left controls: Drag grip [ ✥ ] for pane swap, plus split/tab buttons
+    // 1. Left controls: Drag grip [ ✥ ] for pane swap
     let grip_sense = if !can_interact {
         egui::Sense::hover()
     } else if !*editing_title {
@@ -139,6 +134,11 @@ pub fn render_titlebar(
         }
     } else if can_interact && grip_resp.clicked() {
         output.clicked = true;
+    }
+
+    let pointer_released = ui.input(|i| i.pointer.any_released());
+    if (grip_resp.dragged() || bar_resp.dragged()) && pointer_released {
+        output.drag_stopped = true;
     }
 
     let split_h_resp = small_bar_button(
@@ -180,7 +180,7 @@ pub fn render_titlebar(
 
     let left_controls_right_x = child_ui.cursor().min.x;
 
-    // 2. Right-side controls laid out before the middle title/TextEdit so button IDs & positions remain stable
+    // 2. Right-side controls
     let mut just_started_editing = false;
     child_ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
         if small_bar_button(ui, " × ", fg_color, btn_sense, &tr("Close this pane")).clicked()
@@ -241,7 +241,7 @@ pub fn render_titlebar(
 
         let right_controls_left_x = ui.cursor().max.x;
 
-        // 3. Title text or inline rename entry centered in the titlebar (clamped between left & right controls)
+        // 3. Title text or inline rename entry
         let avail_left = (left_controls_right_x + 4.0).min(bar_rect.max.x);
         let avail_right = (right_controls_left_x - 4.0).max(avail_left);
         let middle_rect = egui::Rect::from_min_max(
@@ -330,7 +330,7 @@ pub fn render_titlebar(
         }
     });
 
-    // 4. Context menu for the titlebar area (disabled when another window/screen is open)
+    // 4. Context menu
     if !other_screen_open {
         if let Some((_ctx, menu_action)) =
             menus.show(&bar_resp, MenuContext::Titlebar(tile_id), &settings.shortcuts)
@@ -358,7 +358,7 @@ pub fn render_titlebar(
         output.context_menu_open = true;
     }
 
-    // 5. Titlebar background interaction (Double-click = Maximize, Drag = Move Window, Click = Focus)
+    // 5. Titlebar background interaction
     if can_interact && !*editing_title && !output.start_tile_drag && output.action.is_none() {
         if bar_resp.double_clicked() {
             output.action = Some(TitleBarAction::ToggleMaximizeWindow);
@@ -374,8 +374,10 @@ pub fn render_titlebar(
         }
     }
 
+    // 修正: 視覚的なアクティブ状態（色）の計算から !output.is_dragging を除外し、
+    // パネル側で visually_active が維持されていれば、ドラッグ中でも常にアクティブ色を保つようにする
     let effective_active =
-        is_active && !other_screen_open && !output.context_menu_open && !output.is_dragging;
+        is_active && !other_screen_open && !output.context_menu_open;
     let bg_color = settings.titlebar_bg(effective_active);
     ui.painter().set(
         bg_shape_idx,

@@ -34,6 +34,7 @@ pub struct Workspace {
     pub top_right_tile: Option<TileId>,
     pub next_pane_number: usize,
     recorded_rects: HashMap<TileId, egui::Rect>,
+    prev_dragged_tile: Option<TileId>,
 }
 
 impl Workspace {
@@ -50,6 +51,7 @@ impl Workspace {
             top_right_tile: Some(first_id),
             next_pane_number: 2,
             recorded_rects: HashMap::new(),
+            prev_dragged_tile: None,
         }
     }
 
@@ -92,6 +94,17 @@ impl Workspace {
     ) {
         self.recorded_rects.clear();
 
+        // シンプルにドラッグが終了した（離された）瞬間を検知
+        let current_dragged_id = self.tree.dragged_id(ctx);
+        if let Some(dragged_id) = self.prev_dragged_tile {
+            if current_dragged_id.is_none() {
+                if self.tree.tiles.get(dragged_id).is_some() {
+                    self.focused_tile = Some(dragged_id);
+                }
+            }
+        }
+        self.prev_dragged_tile = current_dragged_id;
+
         let window_focused = ui.input(|i| i.focused);
         let popup_open = egui::Popup::is_any_open(ctx);
         let any_editing_title = self
@@ -99,7 +112,7 @@ impl Workspace {
             .tiles
             .iter()
             .any(|(_, tile)| matches!(tile, Tile::Pane(p) if p.editing_title));
-        let workspace_dragging = self.tree.dragged_id(ctx).is_some() || prefs_dragging;
+        let workspace_dragging = current_dragged_id.is_some() || prefs_dragging;
 
         let mut behavior = TreeBehavior {
             settings,
@@ -442,11 +455,14 @@ impl<'a> egui_tiles::Behavior<TerminalPane> for TreeBehavior<'a> {
                 }
             }
 
+
+            /*
             // Allow starting a tile drag from any pane's titlebar grip (focuses and drags immediately)
             if output.start_tile_drag && !self.popup_open {
                 *self.focused_tile = Some(tile_id);
                 return UiResponse::DragStarted;
             }
+            */
         }
 
         UiResponse::None
