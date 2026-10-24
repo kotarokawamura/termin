@@ -14,13 +14,13 @@
 // along with this program; if not, write to the Free Software
 // Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
 use eframe::egui;
-use egui_tiles::TileId;
 use crate::config::theme::ThemeSettings;
 use crate::i18n::tr;
 use crate::menus::{
     MenuManager,
     types::{MenuAction, MenuContext},
 };
+use crate::ui::state::PaneContext;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TitleBarAction {
@@ -48,18 +48,12 @@ pub struct TitleBarOutput {
     pub context_menu_open: bool,
 }
 
-#[allow(clippy::too_many_arguments)]
 pub fn render_titlebar(
     ui: &mut egui::Ui,
-    tile_id: TileId,
+    ctx: &PaneContext,
     menus: &MenuManager,
     title: &mut String,
     editing_title: &mut bool,
-    is_active: bool,
-    is_top_right: bool,
-    other_screen_open: bool,
-    is_moving_this_tile: bool,
-    any_tile_moving: bool,
     settings: &ThemeSettings,
 ) -> TitleBarOutput {
     let mut output = TitleBarOutput {
@@ -69,13 +63,14 @@ pub fn render_titlebar(
         context_menu_open: false,
     };
 
-    if other_screen_open && *editing_title {
+    if ctx.is_blocked() && *editing_title {
         *editing_title = false;
     }
 
-    let popup_open = egui::Popup::is_any_open(ui.ctx());
-    let can_interact = !other_screen_open && !popup_open;
-    let visual_active = (is_active || is_moving_this_tile) && !other_screen_open && !popup_open;
+    let can_interact = ctx.can_interact_titlebar();
+    let visual_active = ctx.is_visually_active();
+    let is_moving_self = ctx.is_moving_self();
+    let any_moving = ctx.is_any_moving();
 
     let bar_height = 24.0;
     let desired_size = egui::vec2(ui.available_width(), bar_height);
@@ -105,13 +100,13 @@ pub fn render_titlebar(
     };
 
     // 1. Left controls: Clickable [ ✥ ] button to enter/exit pane move mode
-    let grip_color = if is_moving_this_tile {
+    let grip_color = if is_moving_self {
         egui::Color32::from_rgb(250, 204, 21)
     } else {
         fg_color
     };
     let grip_btn = egui::Button::new(egui::RichText::new(" ✥ ").color(grip_color).size(12.0))
-        .frame(is_moving_this_tile)
+        .frame(is_moving_self)
         .sense(btn_sense);
     let grip_resp = child_ui
         .add(grip_btn)
@@ -129,7 +124,7 @@ pub fn render_titlebar(
         btn_sense,
         &tr("Split Horizontally (Left/Right)"),
     );
-    if can_interact && !any_tile_moving && split_h_resp.clicked() {
+    if can_interact && !any_moving && split_h_resp.clicked() {
         output.action = Some(TitleBarAction::SplitHorizontal);
         output.clicked = true;
     }
@@ -141,7 +136,7 @@ pub fn render_titlebar(
         btn_sense,
         &tr("Split Vertically (Top/Bottom)"),
     );
-    if can_interact && !any_tile_moving && split_v_resp.clicked() {
+    if can_interact && !any_moving && split_v_resp.clicked() {
         output.action = Some(TitleBarAction::SplitVertical);
         output.clicked = true;
     }
@@ -153,8 +148,7 @@ pub fn render_titlebar(
         btn_sense,
         &tr("Add a new tab in this pane"),
     );
-
-    if can_interact && !any_tile_moving && new_tab_resp.clicked() {
+    if can_interact && !any_moving && new_tab_resp.clicked() {
         output.action = Some(TitleBarAction::NewTab);
         output.clicked = true;
     }
@@ -164,16 +158,18 @@ pub fn render_titlebar(
     // 2. Right-side controls
     let mut just_started_editing = false;
     let mut right_controls_left_x = bar_rect.max.x;
+    let mut title_label_rect = egui::Rect::NOTHING;
+
     child_ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
         if small_bar_button(ui, " × ", fg_color, btn_sense, &tr("Close this pane")).clicked()
             && can_interact
-            && !any_tile_moving
+            && !any_moving
         {
             output.action = Some(TitleBarAction::ClosePane);
             output.clicked = true;
         }
 
-        if is_top_right {
+        if ctx.is_top_right {
             if small_bar_button(
                 ui,
                 " 🗖 ",
@@ -183,14 +179,14 @@ pub fn render_titlebar(
             )
                 .clicked()
                 && can_interact
-                && !any_tile_moving
+                && !any_moving
             {
                 output.action = Some(TitleBarAction::ToggleMaximizeWindow);
                 output.clicked = true;
             }
             if small_bar_button(ui, " — ", fg_color, btn_sense, &tr("Minimize window")).clicked()
                 && can_interact
-                && !any_tile_moving
+                && !any_moving
             {
                 output.action = Some(TitleBarAction::MinimizeWindow);
                 output.clicked = true;
@@ -199,7 +195,7 @@ pub fn render_titlebar(
 
         let edit_btn_resp =
             small_bar_button(ui, " ✎ ", fg_color, btn_sense, &tr("Rename pane title"));
-        if can_interact && !any_tile_moving && edit_btn_resp.clicked() {
+        if can_interact && !any_moving && edit_btn_resp.clicked() {
             *editing_title = !*editing_title;
             if *editing_title {
                 just_started_editing = true;
@@ -219,7 +215,7 @@ pub fn render_titlebar(
         )
             .clicked()
             && can_interact
-            && !any_tile_moving
+            && !any_moving
         {
             output.action = Some(TitleBarAction::OpenPreferences);
             output.clicked = true;
@@ -235,7 +231,7 @@ pub fn render_titlebar(
             egui::pos2(avail_right, bar_rect.max.y - 1.0),
         );
 
-        let edit_id = egui::Id::new(("pane_title_edit", tile_id));
+        let edit_id = egui::Id::new(("pane_title_edit", ctx.tile_id));
         if *editing_title {
             let edit_w = middle_rect.width().min(180.0).max(40.0);
             let ideal_min_x = (bar_rect.center().x - edit_w * 0.5).clamp(
@@ -285,6 +281,7 @@ pub fn render_titlebar(
                 egui::pos2(ideal_min_x, middle_rect.min.y),
                 egui::vec2(label_w, middle_rect.height()),
             );
+            title_label_rect = label_rect;
             let mut label_ui = ui.new_child(
                 egui::UiBuilder::new()
                     .max_rect(label_rect)
@@ -292,6 +289,7 @@ pub fn render_titlebar(
                         egui::Direction::LeftToRight,
                     )),
             );
+            // Sense::hover() にすることで、タイトル文字上のドラッグが bar_resp から奪われないようにする
             let lbl_resp = label_ui.add(
                 egui::Label::new(
                     egui::RichText::new(title.as_str())
@@ -299,27 +297,19 @@ pub fn render_titlebar(
                         .size(12.0),
                 )
                     .truncate()
-                    .sense(egui::Sense::CLICK)
+                    .sense(egui::Sense::hover())
                     .selectable(false),
             );
             #[cfg(test)]
             ui.ctx()
                 .data_mut(|d| d.insert_temp(egui::Id::new("title_lbl_rect"), lbl_resp.rect));
-            if can_interact && !any_tile_moving {
-                if lbl_resp.double_clicked() {
-                    *editing_title = true;
-                    output.clicked = true;
-                } else if lbl_resp.clicked() {
-                    output.clicked = true;
-                }
-            }
         }
     });
 
     // 4. Context menu
-    if !other_screen_open && !any_tile_moving {
+    if !ctx.is_blocked() && !any_moving {
         if let Some((_ctx, menu_action)) =
-            menus.show(&bar_resp, MenuContext::Titlebar(tile_id), &settings.shortcuts)
+            menus.show(&bar_resp, MenuContext::Titlebar(ctx.tile_id), &settings.shortcuts)
         {
             output.clicked = true;
             match menu_action {
@@ -340,41 +330,50 @@ pub fn render_titlebar(
         }
     }
 
-    if !other_screen_open && (bar_resp.context_menu_opened() || egui::Popup::is_any_open(ui.ctx())) {
+    if !ctx.is_blocked() && (bar_resp.context_menu_opened() || egui::Popup::is_any_open(ui.ctx())) {
         output.context_menu_open = true;
     }
 
-    // 5. Titlebar background interaction (Window move & focus)
-    // Check if pointer is in the empty draggable middle area (not on left/right buttons)
+    // 5. Titlebar middle area interaction (Window move, double-click, focus)
     let pointer_pos = ui.input(|i| i.pointer.interact_pos().or_else(|| i.pointer.latest_pos()));
-    let in_empty_bar_area = pointer_pos.is_some_and(|pos| {
+    let press_origin = ui.input(|i| i.pointer.press_origin());
+
+    let pos_in_middle = |pos: egui::Pos2| -> bool {
         bar_rect.contains(pos)
             && pos.x >= left_controls_right_x
             && pos.x <= right_controls_left_x
-    });
+    };
 
-    if can_interact && !*editing_title && !any_tile_moving && !output.toggle_tile_move && output.action.is_none() {
+    let in_middle_now = pointer_pos.is_some_and(pos_in_middle);
+    let pressed_in_middle = press_origin.is_some_and(pos_in_middle) || in_middle_now;
+
+    if can_interact && !*editing_title && !any_moving && !output.toggle_tile_move && output.action.is_none() {
         if bar_resp.double_clicked() {
-            output.action = Some(TitleBarAction::ToggleMaximizeWindow);
+            if pointer_pos.is_some_and(|p| title_label_rect.contains(p)) {
+                *editing_title = true;
+            } else {
+                output.action = Some(TitleBarAction::ToggleMaximizeWindow);
+            }
             output.clicked = true;
-        } else if in_empty_bar_area
+        } else if pressed_in_middle
             && (bar_resp.drag_started_by(egui::PointerButton::Primary)
-            || ui.input(|i| {
+            || bar_resp.dragged_by(egui::PointerButton::Primary)
+            || (in_middle_now
+            && ui.input(|i| {
             i.pointer.button_down(egui::PointerButton::Primary)
-                && i.pointer.delta() != egui::Vec2::ZERO
-        }))
+                && i.pointer.delta().length_sq() > 0.0
+        })))
         {
             output.action = Some(TitleBarAction::StartWindowMove);
             output.clicked = true;
-        } else if (in_empty_bar_area && ui.input(|i| i.pointer.button_pressed(egui::PointerButton::Primary)))
+        } else if (in_middle_now && ui.input(|i| i.pointer.button_pressed(egui::PointerButton::Primary)))
             || bar_resp.clicked()
         {
             output.clicked = true;
         }
     }
 
-    let effective_active =
-        (is_active || is_moving_this_tile) && !other_screen_open && !output.context_menu_open;
+    let effective_active = visual_active && !output.context_menu_open;
     let bg_color = settings.titlebar_bg(effective_active);
     ui.painter().set(
         bg_shape_idx,

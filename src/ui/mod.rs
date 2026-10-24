@@ -15,9 +15,7 @@
 // Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
 pub mod app;
 pub mod pane;
+pub mod state;
 pub mod titlebar;
+pub mod tree_ops;
 pub mod workspace;
-//
-//
-// pub mod contextmenu;
-
