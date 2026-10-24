@@ -74,7 +74,7 @@ impl TerminalPane {
             selection_start: None,
             selection_end: None,
             select_anchor_pos: None,
-            pending_paste: false,
+            pending_paste: true,
         }
     }
 
@@ -367,39 +367,37 @@ impl TerminalPane {
         // 3. Context menu for the terminal screen canvas
         let mut menu_action_output = None;
 
-        if !any_tile_moving {
-            if let Some((_ctx, menu_action)) =
-                menus.show(&term_resp, MenuContext::Pane(tile_id), &settings.shortcuts)
-            {
-                clicked_or_focused = true;
-                match menu_action {
-                    MenuAction::Copy => {
-                        self.copy_selection_or_screen(ui.ctx());
-                    }
-                    MenuAction::Paste => {
-                        self.pending_paste = true;
-                        ui.ctx().send_viewport_cmd(egui::ViewportCommand::RequestPaste);
-                    }
-                    MenuAction::SplitHorizontal => {
-                        menu_action_output = Some(TitleBarAction::SplitHorizontal);
-                    }
-                    MenuAction::SplitVertical => {
-                        menu_action_output = Some(TitleBarAction::SplitVertical);
-                    }
-                    MenuAction::NewTab => {
-                        menu_action_output = Some(TitleBarAction::NewTab);
-                    }
-                    MenuAction::ClearScrollback => {
-                        self.backend.clear_scrollback();
-                    }
-                    MenuAction::ClosePane => {
-                        menu_action_output = Some(TitleBarAction::ClosePane);
-                    }
-                    MenuAction::OpenSettings => {
-                        menu_action_output = Some(TitleBarAction::OpenPreferences);
-                    }
-                    _ => {}
+        if let Some((_ctx, menu_action)) =
+            menus.show(&term_resp, MenuContext::Pane(tile_id), &settings.shortcuts)
+        {
+            clicked_or_focused = true;
+            match menu_action {
+                MenuAction::Copy => {
+                    self.copy_selection_or_screen(ui.ctx());
                 }
+                MenuAction::Paste => {
+                    self.pending_paste = true;
+                    ui.ctx().send_viewport_cmd(egui::ViewportCommand::RequestPaste);
+                }
+                MenuAction::SplitHorizontal => {
+                    menu_action_output = Some(TitleBarAction::SplitHorizontal);
+                }
+                MenuAction::SplitVertical => {
+                    menu_action_output = Some(TitleBarAction::SplitVertical);
+                }
+                MenuAction::NewTab => {
+                    menu_action_output = Some(TitleBarAction::NewTab);
+                }
+                MenuAction::ClearScrollback => {
+                    self.backend.clear_scrollback();
+                }
+                MenuAction::ClosePane => {
+                    menu_action_output = Some(TitleBarAction::ClosePane);
+                }
+                MenuAction::OpenSettings => {
+                    menu_action_output = Some(TitleBarAction::OpenPreferences);
+                }
+                _ => {}
             }
         }
 
@@ -753,6 +751,7 @@ impl TerminalPane {
                         self.copy_selection_or_screen(ui.ctx());
                         continue;
                     }
+
                     if shortcut_matches_event(&shortcuts.paste, key, physical_key, modifiers, super_held) {
                         if !has_paste_event {
                             self.pending_paste = true;

@@ -513,10 +513,10 @@ impl<'a> egui_tiles::Behavior<TerminalPane> for TreeBehavior<'a> {
             self.external_zoom_delta,
         );
 
-        if !self.other_screen_open && !self.prefs_capturing_pointer && !self.popup_open {
-            if output.toggle_tile_move {
+        if !self.other_screen_open && !self.prefs_capturing_pointer {
+            if output.toggle_tile_move && !self.popup_open {
                 self.pending_move_toggle = Some(tile_id);
-            } else if self.moving_tile.is_some() {
+            } else if self.moving_tile.is_some() && !self.popup_open {
                 if output.clicked_or_focused {
                     self.pending_move_target = Some(tile_id);
                 }
