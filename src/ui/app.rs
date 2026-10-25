@@ -338,8 +338,7 @@ impl eframe::App for TerminApp {
             style.visuals.widgets.noninteractive.bg_stroke.color = self.settings.separator_color();
         });
 
-        // Preferences modal / floating window rendered before workspace so wants_keyboard_input is accurate
-        let prefs_was_open = self.prefs_window.any_open();
+        // Preferences floating window rendered before workspace so pointer/keyboard capture states are accurate
         self.prefs_window.ui(&ctx, &mut self.settings);
         if self.prefs_window.save_layout_requested {
             self.prefs_window.save_layout_requested = false;
@@ -349,6 +348,9 @@ impl eframe::App for TerminApp {
             self.prefs_window.load_layout_requested = false;
             self.workspace.load_layout();
         }
+
+        // Handle edge resizing when not over subwindows
+        self.handle_custom_resize_frame(&ctx);
 
         let is_maximized = ctx.input(|i| i.viewport().maximized.unwrap_or(false));
         let border_w = if is_maximized {
@@ -365,7 +367,8 @@ impl eframe::App for TerminApp {
                 self.settings.frame_border_color(),
             ));
 
-        let other_screen_open = prefs_was_open || self.prefs_window.any_open();
+        // 設定画面が開いていても、マウスが設定画面上にない＆設定画面のTextEditやRecord中ではない時は後ろのパネルを操作可能にする
+        let prefs_capturing_keyboard = self.prefs_window.is_capturing_keyboard(&ctx);
         let prefs_capturing_pointer = self.prefs_window.is_capturing_pointer(&ctx);
         let prefs_dragging = self.prefs_window.subwindow_dragging;
 
@@ -376,7 +379,7 @@ impl eframe::App for TerminApp {
                 &mut self.settings,
                 &self.menu_manager,
                 &mut self.prefs_window.open,
-                other_screen_open,
+                prefs_capturing_keyboard,
                 prefs_capturing_pointer,
                 prefs_dragging,
                 external_zoom_delta,

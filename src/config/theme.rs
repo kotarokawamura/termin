@@ -31,6 +31,8 @@ pub struct ShortcutSettings {
     pub focus_next_pane: String,
     pub focus_prev_pane: String,
     pub open_preferences: String,
+    pub close_preferences: String,
+    pub toggle_collapse_preferences: String,
     pub toggle_fullscreen: String,
     pub zoom_in: String,
     pub zoom_out: String,
@@ -49,6 +51,8 @@ impl Default for ShortcutSettings {
             focus_next_pane: "Ctrl+Tab".to_string(),
             focus_prev_pane: "Ctrl+Shift+Tab".to_string(),
             open_preferences: "Ctrl+,".to_string(),
+            close_preferences: "Ctrl+Shift+Q".to_string(),
+            toggle_collapse_preferences: "Ctrl+Shift+M".to_string(),
             toggle_fullscreen: "F11".to_string(),
             zoom_in: "Ctrl+=".to_string(),
             zoom_out: "Ctrl+-".to_string(),
@@ -67,6 +71,8 @@ pub struct ThemeSettings {
     pub frame_bg_color: String,
     pub frame_border_color: String,
     pub separator_color: String,
+    pub terminal_bg_color: String,
+    pub terminal_bg_opacity: f32,
     pub separator_width: f32,
     pub frame_border_width: f32,
     pub target_fps: u32,
@@ -94,6 +100,8 @@ impl Default for ThemeSettings {
             frame_bg_color: "#2b2b2b".to_string(),
             frame_border_color: "#5a5a5a".to_string(),
             separator_color: String::new(),
+            terminal_bg_color: "#000000".to_string(),
+            terminal_bg_opacity: 1.0,
             separator_width: 2.0,
             frame_border_width: 5.0,
             target_fps: 30,
@@ -106,7 +114,6 @@ impl Default for ThemeSettings {
         }
     }
 }
-
 impl ThemeSettings {
     pub fn config_path() -> PathBuf {
         let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
@@ -320,7 +327,9 @@ impl ThemeSettings {
     }
 
     pub fn frame_bg_color(&self) -> Color32 {
-        parse_color(&self.frame_bg_color).unwrap_or(Color32::from_rgb(43, 43, 43))
+        let base = parse_color(&self.frame_bg_color).unwrap_or(Color32::from_rgb(43, 43, 43));
+        let alpha = (self.terminal_bg_opacity.clamp(0.0, 1.0) * 255.0).round() as u8;
+        Color32::from_rgba_unmultiplied(base.r(), base.g(), base.b(), alpha)
     }
 
     pub fn frame_border_color(&self) -> Color32 {
@@ -330,7 +339,22 @@ impl ThemeSettings {
     pub fn separator_color(&self) -> Color32 {
         parse_color(&self.separator_color).unwrap_or(Color32::from_rgb(74, 74, 74))
     }
+
+    /// ターミナルパネルの背景色（不透明ベースカラー、デフォルトは完全な黒 #000000）
+    pub fn terminal_bg_base_color(&self) -> Color32 {
+        parse_color(&self.terminal_bg_color).unwrap_or(Color32::BLACK)
+    }
+
+    /// 透明度（terminal_bg_opacity）を適用したターミナルパネルの背景色
+    pub fn terminal_bg_color_with_opacity(&self) -> Color32 {
+        let base = self.terminal_bg_base_color();
+        let alpha = (self.terminal_bg_opacity.clamp(0.0, 1.0) * 255.0).round() as u8;
+        Color32::from_rgba_unmultiplied(base.r(), base.g(), base.b(), alpha)
+    }
+
 }
+
+
 
 /// Find a sensible default Japanese-capable font on Debian systems.
 fn default_debian_font_path() -> Option<String> {
@@ -532,8 +556,80 @@ pub fn is_super_down(i: &egui::InputState, event_mods: Option<egui::Modifiers>) 
         || i.key_down(egui::Key::SuperRight)
 }
 
-/// Checks if a keyboard event matches a configured shortcut string (e.g., `"Ctrl+Shift+C"`, `"Super+Enter"`, `"Alt+D"`, `"F11"`).
-/// Multiple bindings can be separated by `/` or `|` (e.g., `"Ctrl+Shift+E / Alt+D"`).
+/// 現在の egui InputState およびイベント一覧から Super (Meta / Windows / Command) キーが押されているか判定する
+pub fn detect_super_held(i: &egui::InputState) -> bool {
+    if i.modifiers.mac_cmd
+        || i.key_down(egui::Key::SuperLeft)
+        || i.key_down(egui::Key::SuperRight)
+    {
+        return true;
+    }
+    // Linux (X11/Wayland) では Ctrl が押されていないのに command フラグだけが立つケースがある（Superがcommandにマップされる）
+    if i.modifiers.command && !i.modifiers.ctrl {
+        return true;
+    }
+    for ev in &i.events {
+        if let egui::Event::Key {
+            key,
+            physical_key,
+            pressed: true,
+            modifiers,
+            ..
+        } = ev
+        {
+            if matches!(key, egui::Key::SuperLeft | egui::Key::SuperRight)
+                || matches!(
+                    physical_key,
+                    Some(egui::Key::SuperLeft | egui::Key::SuperRight)
+                )
+                || modifiers.mac_cmd
+                || (modifiers.command && !modifiers.ctrl)
+            {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// 複数のショートカット文字列（`/`、`|`、または区切りカンマ `,`）を個別のバインディングに分割する。
+/// ただし `"Ctrl+,"` のようにキー自体がカンマである場合は分割しない。
+pub fn split_shortcut_bindings(binding: &str) -> Vec<String> {
+    let mut result = Vec::new();
+    for slash_part in binding.split(['/', '|']) {
+        let s = slash_part.trim();
+        if s.is_empty() {
+            continue;
+        }
+        // `Ctrl+,` のように `+` の直後に `,` が来るケースを保護しつつ `,` で分割する
+        let mut current = String::new();
+        let mut chars = s.chars().peekable();
+        while let Some(ch) = chars.next() {
+            if ch == ',' {
+                let prev_non_space = current.trim_end().chars().last();
+                // 直前が '+' ならキーとしてのカンマ（例: "Ctrl+,"）なので分割しない
+                if prev_non_space == Some('+') || current.trim().is_empty() {
+                    current.push(ch);
+                } else {
+                    let trimmed = current.trim().to_string();
+                    if !trimmed.is_empty() {
+                        result.push(trimmed);
+                    }
+                    current.clear();
+                }
+            } else {
+                current.push(ch);
+            }
+        }
+        let trimmed = current.trim().to_string();
+        if !trimmed.is_empty() {
+            result.push(trimmed);
+        }
+    }
+    result
+}
+
+/// Checks if a keyboard event matches a configured shortcut string (e.g., `"Ctrl+Shift+C"`, `"Super+C / Alt+C"`, `"F11"`).
 pub fn shortcut_matches_event(
     binding: &str,
     key: egui::Key,
@@ -541,11 +637,8 @@ pub fn shortcut_matches_event(
     modifiers: egui::Modifiers,
     super_held: bool,
 ) -> bool {
-    for part in binding.split(['/', '|']) {
-        let trimmed = part.trim();
-        if !trimmed.is_empty()
-            && single_shortcut_matches(trimmed, key, physical_key, modifiers, super_held)
-        {
+    for part in split_shortcut_bindings(binding) {
+        if single_shortcut_matches(&part, key, physical_key, modifiers, super_held) {
             return true;
         }
     }
@@ -569,16 +662,12 @@ fn single_shortcut_matches(
         return false;
     }
 
-    // プレフィックス（修飾キー）を順番に剥がす。
-    // ただし `Ctrl++` のようにキー自体が `+` のケースを壊さないよう、
-    // `after` が空文字列になる場合は分割せずキー本体として残す。
     loop {
         let Some((prefix, after)) = rest.split_once('+') else {
             break;
         };
         let after_trimmed = after.trim();
         if after_trimmed.is_empty() {
-            // 例: rest が "+" のみ、または末尾が "+" の場合
             break;
         }
 
@@ -613,8 +702,8 @@ fn single_shortcut_matches(
         return false;
     };
 
-    let has_super = super_held || modifiers.mac_cmd;
-    let has_ctrl = modifiers.ctrl || (modifiers.command && !has_super);
+    let has_super = super_held || modifiers.mac_cmd || (modifiers.command && !modifiers.ctrl);
+    let has_ctrl = modifiers.ctrl;
 
     if has_ctrl != want_ctrl
         || modifiers.shift != want_shift
@@ -624,13 +713,10 @@ fn single_shortcut_matches(
         return false;
     }
 
-    // physical_key と論理 key のどちらかで一致すればOKとする。
-    // （Shift押下時に物理キーは Key::C や Key::Equals のままだが論理キーが変わるケースに対応）
     if key == target_key || physical_key == Some(target_key) {
         return true;
     }
 
-    // Zoom 等でよく使われる `+` / `=` / `;` (JIS配列の+) の揺れを吸収
     if matches!(target_key, egui::Key::Plus | egui::Key::Equals)
         && (matches!(key, egui::Key::Plus | egui::Key::Equals)
         || matches!(physical_key, Some(egui::Key::Plus | egui::Key::Equals)))
@@ -723,19 +809,16 @@ pub fn parse_key_token(token: &str) -> Option<egui::Key> {
     }
 }
 
-/// Format a pressed key + modifiers into a human-readable shortcut string (e.g. `"Super+Ctrl+Shift+T"`).
+/// Format a pressed key + modifiers into a human-readable shortcut string (e.g. `"Super+C"`, `"Ctrl+Shift+T"`).
 pub fn format_key_shortcut(
     key: egui::Key,
     physical_key: Option<egui::Key>,
     modifiers: egui::Modifiers,
     super_held: bool,
 ) -> Option<String> {
-    // Super 単体押下は無視する
     if matches!(key, egui::Key::SuperLeft | egui::Key::SuperRight) {
         return None;
     }
-
-    // Shift と同時押しした際に論理 key が記号に化けるのを防ぐため physical_key を優先する
     let effective_key = physical_key.unwrap_or(key);
     if matches!(effective_key, egui::Key::SuperLeft | egui::Key::SuperRight) {
         return None;
@@ -767,8 +850,8 @@ pub fn format_key_shortcut(
         other => format!("{:?}", other),
     };
 
-    let has_super = super_held || modifiers.mac_cmd;
-    let has_ctrl = modifiers.ctrl || (modifiers.command && !has_super);
+    let has_super = super_held || modifiers.mac_cmd || (modifiers.command && !modifiers.ctrl);
+    let has_ctrl = modifiers.ctrl;
 
     let mut parts = Vec::new();
     if has_super {

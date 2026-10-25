@@ -89,14 +89,14 @@ impl Workspace {
 
         needs_repaint
     }
-
     /// 現在のフレームにおけるワークスペースの `InteractionMode` を算出する
     fn current_interaction_mode(
         &self,
-        other_screen_open: bool,
+        prefs_capturing_keyboard: bool,
         prefs_capturing_pointer: bool,
     ) -> InteractionMode {
-        if other_screen_open || prefs_capturing_pointer {
+        // マウスが設定画面上にあるか、設定画面でキー入力中（TextEditフォーカス中・ショートカットRecord中）の場合はブロック
+        if prefs_capturing_pointer || prefs_capturing_keyboard {
             return InteractionMode::BlockedByModal;
         }
         if let Some((editing_id, _)) = self
@@ -121,7 +121,7 @@ impl Workspace {
         settings: &mut ThemeSettings,
         menus: &MenuManager,
         prefs_open: &mut bool,
-        other_screen_open: bool,
+        prefs_capturing_keyboard: bool,
         prefs_capturing_pointer: bool,
         _prefs_dragging: bool,
         external_zoom_delta: f32,
@@ -134,7 +134,7 @@ impl Workspace {
 
         // フォーカス喪失・Esc押下・別画面オープン時はパネル移動モードを解除
         if !window_focused
-            || other_screen_open
+            || prefs_capturing_keyboard
             || popup_open
             || ui.input(|i| i.key_pressed(egui::Key::Escape))
             || self
@@ -144,7 +144,7 @@ impl Workspace {
             self.moving_tile = None;
         }
 
-        let mode = self.current_interaction_mode(other_screen_open, prefs_capturing_pointer);
+        let mode = self.current_interaction_mode(prefs_capturing_keyboard, prefs_capturing_pointer);
 
         let mut behavior = TreeBehavior {
             settings,

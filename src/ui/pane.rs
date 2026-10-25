@@ -14,7 +14,10 @@
 // along with this program; if not, write to the Free Software
 // Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
 use eframe::egui;
-use crate::config::theme::{is_super_down, shortcut_matches_event, ShortcutSettings, ThemeSettings};
+// ファイル冒頭の import を更新
+use crate::config::theme::{
+    detect_super_held, shortcut_matches_event, ShortcutSettings, ThemeSettings,
+};
 use crate::menus::{
     MenuManager,
     types::{MenuAction, MenuContext},
@@ -50,6 +53,7 @@ pub struct TerminalPane {
     pub selection_end: Option<(u16, u16)>,
     select_anchor_pos: Option<egui::Pos2>,
     pub pending_paste: bool,
+    pub super_key_latched: bool,
 }
 
 impl TerminalPane {
@@ -86,6 +90,7 @@ impl TerminalPane {
             selection_end: None,
             select_anchor_pos: None,
             pending_paste: false,
+            super_key_latched: false,
         }
     }
 
@@ -164,13 +169,18 @@ impl TerminalPane {
             full_rect.max,
         );
 
-        let pointer_over_floating = blocked
-            || ui
-            .input(|i| i.pointer.interact_pos().or_else(|| i.pointer.hover_pos()))
+        // ポインタが設定画面やポップアップ等のフローティングレイヤー上にあるか厳密に判定
+        let pointer_over_floating = ui
+            .input(|i| {
+                i.pointer
+                    .interact_pos()
+                    .or_else(|| i.pointer.hover_pos())
+                    .or_else(|| i.pointer.latest_pos())
+            })
             .and_then(|pos| ui.ctx().layer_id_at(pos))
             .is_some_and(|layer| layer.order != egui::Order::Background);
 
-        let canvas_sense = if blocked || ctx.popup_open || pointer_over_floating {
+        let canvas_sense = if ctx.popup_open || pointer_over_floating {
             egui::Sense::hover()
         } else if visually_active && !any_moving {
             egui::Sense::click_and_drag()
@@ -181,31 +191,57 @@ impl TerminalPane {
         let term_resp = ui.interact(rect, canvas_id, canvas_sense);
         let scrollbar_resp = ui.interact(scrollbar_rect, scrollbar_id, canvas_sense);
 
-        if !blocked
-            && !ctx.popup_open
+        // 設定画面のTextEdit等にフォーカスがある状態でも、設定画面の外（後ろのパネル上）をクリックしたら
+        // 設定画面のフォーカスを外してこのパネルをアクティブにする
+        if !ctx.popup_open
             && !pointer_over_floating
             && (term_resp.clicked()
             || term_resp.drag_started()
             || scrollbar_resp.clicked()
             || scrollbar_resp.drag_started()
-            || (any_moving
-            && ui.input(|i| i.pointer.button_pressed(egui::PointerButton::Primary))
+            || (ui.input(|i| i.pointer.button_pressed(egui::PointerButton::Primary))
             && ui
             .input(|i| i.pointer.interact_pos())
             .is_some_and(|p| pane_rect.contains(p))))
         {
+            if let Some(focused_id) = ui.ctx().memory(|m| m.focused()) {
+                if focused_id != canvas_id {
+                    ui.ctx().memory_mut(|m| m.surrender_focus(focused_id));
+                }
+            }
             clicked_or_focused = true;
         }
+
+        // Super キーの押下状態をラッチ追跡
+        ui.input(|i| {
+            for ev in &i.events {
+                if let egui::Event::Key {
+                    key,
+                    physical_key,
+                    pressed,
+                    ..
+                } = ev
+                {
+                    if matches!(key, egui::Key::SuperLeft | egui::Key::SuperRight)
+                        || matches!(
+                            physical_key,
+                            Some(egui::Key::SuperLeft | egui::Key::SuperRight)
+                        )
+                    {
+                        self.super_key_latched = *pressed;
+                    }
+                }
+            }
+            if !i.focused {
+                self.super_key_latched = false;
+            }
+        });
 
         let pane_hovered = (term_resp.hovered() || scrollbar_resp.hovered())
             && !pointer_over_floating
             && !blocked
             && !ctx.popup_open;
-        let super_held = ui.input(|i| {
-            i.key_down(egui::Key::SuperLeft)
-                || i.key_down(egui::Key::SuperRight)
-                || i.modifiers.mac_cmd
-        });
+        let super_held = self.super_key_latched || ui.input(detect_super_held);
 
         let can_use_terminal = ctx.can_interact_terminal(self.editing_title, false);
 
@@ -404,7 +440,8 @@ impl TerminalPane {
         }
 
         let painter = ui.painter_at(full_rect);
-        painter.rect_filled(full_rect, 0.0, egui::Color32::from_rgb(24, 24, 24));
+        // 設定されたパネル背景色と透明度で塗りつぶす（デフォルトは #000000 の真っ黒）
+        painter.rect_filled(full_rect, 0.0, settings.terminal_bg_color_with_opacity());
 
         // Draw cells in two passes
         let (rows, cols) = self.backend.size();
@@ -425,7 +462,12 @@ impl TerminalPane {
                     (cell.fg, cell.bg)
                 };
 
-                if bg != crate::vte::RgbColor(18, 18, 18) {
+                // デフォルト背景色（(18, 18, 18) または (0, 0, 0) かつ非反転）のセルは個別に塗らず、
+                // 下地の terminal_bg_color_with_opacity をそのまま透過表示させる
+                let is_default_bg = !cell.inverse
+                    && (bg == crate::vte::RgbColor(18, 18, 18)
+                    || bg == crate::vte::RgbColor(0, 0, 0));
+                if !is_default_bg {
                     painter.rect_filled(
                         cell_rect,
                         0.0,
@@ -650,15 +692,15 @@ impl TerminalPane {
         ctx.copy_text(lines.join("\n"));
     }
 
+
     fn handle_keyboard_input(&mut self, ui: &mut egui::Ui, shortcut_handled: bool) {
         let events = ui.input(|i| i.events.clone());
         let current_mods = ui.input(|i| i.modifiers);
-        let super_held = ui.input(|i| is_super_down(i, None));
+        let super_held = self.super_key_latched || ui.input(detect_super_held);
 
         for event in events {
             match event {
                 egui::Event::Text(text) => {
-                    // ショートカットが発動した場合や、Super / Ctrl / Alt が押されている時の Text イベントは PTY に流さない
                     if shortcut_handled || super_held || current_mods.ctrl || current_mods.alt {
                         continue;
                     }
@@ -674,8 +716,8 @@ impl TerminalPane {
                             self.backend.set_scroll_offset(0);
                         }
                         self.session.write_input(text.as_bytes());
-                    } else if !shortcut_handled {
-                        // ショートカット外の通常の Ctrl+V は 0x16 (^V) を PTY に送る
+                    } else if !shortcut_handled && !current_mods.shift && !super_held {
+                        // ショートカット外の純粋な Ctrl+V のみ 0x16 (^V) を PTY に送る
                         self.session.write_input(&[0x16]);
                     }
                 }
@@ -684,8 +726,6 @@ impl TerminalPane {
         }
     }
 
-    /// 設定されたショートカット一覧と照合し、一致したものがあれば実行する。
-    /// 戻り値: (ショートカットとして消費されたか, 発行されたTitleBarAction)
     fn try_match_configured_shortcuts(
         &mut self,
         ui: &mut egui::Ui,
@@ -762,15 +802,16 @@ impl TerminalPane {
 
         let events = ui.input(|i| i.events.clone());
         let current_mods = ui.input(|i| i.modifiers);
-        let super_held = ui.input(|i| is_super_down(i, None));
+        let super_held = self.super_key_latched || ui.input(detect_super_held);
         let has_paste_event = events.iter().any(|e| matches!(e, egui::Event::Paste(_)));
 
         for event in &events {
             match event {
-                // egui が Ctrl+C / Ctrl+Shift+C を Event::Copy に変換した場合
                 egui::Event::Copy => {
                     let mut mods = current_mods;
-                    mods.ctrl = true;
+                    if !super_held {
+                        mods.ctrl = true;
+                    }
                     let (matched, act) = self.try_match_configured_shortcuts(
                         ui,
                         shortcuts,
@@ -786,20 +827,16 @@ impl TerminalPane {
                         if act.is_some() {
                             action = act;
                         }
-                    } else if self.normalized_selection().is_some() {
-                        self.copy_selection_or_screen(ui.ctx());
-                        self.selection_start = None;
-                        self.selection_end = None;
-                        any_shortcut_consumed = true;
                     } else if !mods.shift && !super_held {
-                        // 選択範囲がなく Ctrl+C が押された場合は SIGINT (^C)
+                        // 設定されたコピーショートカットに一致せず、純粋な Ctrl+C が押された場合は SIGINT (^C) を送る
                         self.session.write_input(&[0x03]);
                     }
                 }
-                // egui が Ctrl+X / Ctrl+Shift+X を Event::Cut に変換した場合
                 egui::Event::Cut => {
                     let mut mods = current_mods;
-                    mods.ctrl = true;
+                    if !super_held {
+                        mods.ctrl = true;
+                    }
                     let (matched, act) = self.try_match_configured_shortcuts(
                         ui,
                         shortcuts,
@@ -819,14 +856,14 @@ impl TerminalPane {
                         self.session.write_input(&[0x18]);
                     }
                 }
-                // egui が Ctrl+V / Ctrl+Shift+V を Event::Paste に変換した場合
                 egui::Event::Paste(text) => {
                     if self.pending_paste {
-                        // RequestPaste による非同期ペースト応答の場合は handle_keyboard_input 側で処理する
                         continue;
                     }
                     let mut mods = current_mods;
-                    mods.ctrl = true;
+                    if !super_held {
+                        mods.ctrl = true;
+                    }
                     let (matched, act) = self.try_match_configured_shortcuts(
                         ui,
                         shortcuts,
@@ -860,9 +897,10 @@ impl TerminalPane {
                         mac_cmd: modifiers.mac_cmd || current_mods.mac_cmd,
                         command: modifiers.command || current_mods.command,
                     };
-                    let ev_super = super_held || merged_mods.mac_cmd;
+                    let ev_super = super_held
+                        || merged_mods.mac_cmd
+                        || (merged_mods.command && !merged_mods.ctrl);
 
-                    // 1. まず設定画面のカスタムショートカットを最優先で判定
                     let (matched, act) = self.try_match_configured_shortcuts(
                         ui,
                         shortcuts,
@@ -881,26 +919,18 @@ impl TerminalPane {
                         continue;
                     }
 
-                    // Super キーが押されているがどのショートカットにもマッチしなかった場合は PTY へ誤送信しない
                     if ev_super {
                         continue;
                     }
 
-                    // 2. ショートカットに該当しなかった通常のターミナルキー入力を PTY へ送信
                     if merged_mods.ctrl && !merged_mods.shift && !merged_mods.alt {
                         let effective_key = physical_key.unwrap_or(key);
                         let key_name = format!("{:?}", effective_key);
                         if key_name.len() == 1 {
                             let ch = key_name.chars().next().unwrap();
                             if ch.is_ascii_uppercase() {
-                                if ch == 'C' && self.normalized_selection().is_some() {
-                                    self.copy_selection_or_screen(ui.ctx());
-                                    self.selection_start = None;
-                                    self.selection_end = None;
-                                } else {
-                                    let ctrl_code = (ch as u8) & 0x1F;
-                                    self.session.write_input(&[ctrl_code]);
-                                }
+                                let ctrl_code = (ch as u8) & 0x1F;
+                                self.session.write_input(&[ctrl_code]);
                             }
                         } else {
                             match effective_key {

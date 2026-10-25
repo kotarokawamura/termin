@@ -17,9 +17,11 @@ use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::sync::Arc;
 use eframe::egui;
+// ファイル冒頭の import を更新
 use crate::config::theme::{
-    color_to_hex, discover_system_fonts, format_key_shortcut, is_cjk_font, is_monospace_font,
-    is_valid_font_bytes, parse_color, ShortcutSettings, ThemeSettings,is_super_down
+    color_to_hex, detect_super_held, discover_system_fonts, format_key_shortcut, is_cjk_font,
+    is_monospace_font, is_valid_font_bytes, parse_color, split_shortcut_bindings, ShortcutSettings,
+    ThemeSettings,
 };
 use crate::i18n::{active_catalog_info, discover_po_files, tr};
 
@@ -40,6 +42,12 @@ pub enum FontCategoryFilter {
     JapaneseCjk,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RecordMode {
+    Replace,
+    Append,
+}
+
 #[derive(Default)]
 pub struct PreferencesWindow {
     pub open: bool,
@@ -55,7 +63,8 @@ pub struct PreferencesWindow {
     pub loaded_preview_fonts: HashMap<String, (String, Arc<egui::FontData>)>,
     pub skipped_preview_fonts: HashSet<String>,
     pub next_preview_font_id: usize,
-    pub recording_shortcut: Option<&'static str>,
+    pub recording_shortcut: Option<(&'static str, RecordMode)>,
+    pub super_key_latched: bool,
     pub save_layout_requested: bool,
     pub load_layout_requested: bool,
     pub window_rects: Vec<egui::Rect>,
@@ -68,6 +77,8 @@ impl PreferencesWindow {
         self.open || self.font_sample_window_open
     }
 
+    /// マウスカーソルが設定ウィンドウ（またはその上のコンボボックス等のポップアップ）上にあるか、
+    /// あるいは設定ウィンドウをドラッグ中であれば true を返す。
     pub fn is_capturing_pointer(&self, ctx: &egui::Context) -> bool {
         if !self.any_open() {
             return false;
@@ -75,7 +86,12 @@ impl PreferencesWindow {
         if self.pointer_captured_by_subwindow || self.subwindow_dragging {
             return true;
         }
-        let pointer_pos = ctx.input(|i| i.pointer.interact_pos().or_else(|| i.pointer.hover_pos()));
+        let pointer_pos = ctx.input(|i| {
+            i.pointer
+                .interact_pos()
+                .or_else(|| i.pointer.hover_pos())
+                .or_else(|| i.pointer.latest_pos())
+        });
         if let Some(pos) = pointer_pos {
             if self.window_rects.iter().any(|r| r.expand(4.0).contains(pos)) {
                 return true;
@@ -90,6 +106,17 @@ impl PreferencesWindow {
         false
     }
 
+    /// 設定ウィンドウ内でショートカット録画中、または設定ウィンドウ内の TextEdit 等がフォーカスを持っている場合は true。
+    /// false の場合は設定ウィンドウが開いていても背後のターミナルでキーボード入力を行える。
+    pub fn is_capturing_keyboard(&self, ctx: &egui::Context) -> bool {
+        if !self.any_open() {
+            return false;
+        }
+        if self.recording_shortcut.is_some() {
+            return true;
+        }
+        ctx.egui_wants_keyboard_input()
+    }
     pub fn ui(&mut self, ctx: &egui::Context, settings: &mut ThemeSettings) {
         self.window_rects.clear();
         self.subwindow_dragging = false;
@@ -318,6 +345,33 @@ impl PreferencesWindow {
                     egui::Color32::from_rgb(74, 74, 74),
                     "Default (#4a4a4a)",
                 );
+
+                changed |= color_row(
+                    ui,
+                    &tr("Pane Separator Color:"),
+                    &mut settings.separator_color,
+                    egui::Color32::from_rgb(74, 74, 74),
+                    "Default (#4a4a4a)",
+                );
+                changed |= color_row(
+                    ui,
+                    &tr("Terminal Panel BG:"),
+                    &mut settings.terminal_bg_color,
+                    egui::Color32::BLACK,
+                    "Default (#000000)",
+                );
+
+                ui.label(tr("Terminal BG Opacity:"));
+                if ui
+                    .add(
+                        egui::Slider::new(&mut settings.terminal_bg_opacity, 0.0..=1.0)
+                            .step_by(0.01),
+                    )
+                    .changed()
+                {
+                    changed = true;
+                }
+                ui.end_row();
 
                 ui.label(tr("Pane Separator Width (px):"));
                 if ui
@@ -740,21 +794,48 @@ impl PreferencesWindow {
 
         ui.label(tr(
             "Configure keyboard shortcuts for terminal and workspace actions.\n\
-             You can type a shortcut directly (e.g. Ctrl+Shift+T, Super+Enter, Alt+D, F11) or click 'Record' and press a key combination.",
+             Multiple shortcuts can be separated by '/' or ',' (e.g. Super+C / Ctrl+Shift+C).\n\
+             Use 'Record' to replace or '+ Add' to append another shortcut.",
         ));
         ui.add_space(10.0);
 
+        // Super キーの押下ラッチ更新（Wayland/X11 で Key::SuperLeft の押しっぱなし状態が modifiers に乗らない環境対策）
+        ui.input(|i| {
+            for ev in &i.events {
+                if let egui::Event::Key {
+                    key,
+                    physical_key,
+                    pressed,
+                    ..
+                } = ev
+                {
+                    if matches!(key, egui::Key::SuperLeft | egui::Key::SuperRight)
+                        || matches!(
+                            physical_key,
+                            Some(egui::Key::SuperLeft | egui::Key::SuperRight)
+                        )
+                    {
+                        self.super_key_latched = *pressed;
+                    }
+                }
+            }
+            if !i.focused {
+                self.super_key_latched = false;
+            }
+        });
+
         // If recording is active, capture the next non-modifier key press
-        let mut recorded_binding: Option<(&'static str, String)> = None;
+        let mut recorded_binding: Option<(&'static str, RecordMode, String)> = None;
         let mut cancel_recording = false;
-        if let Some(target_field) = self.recording_shortcut {
-            // 録画中は TextEdit 等にキー入力が吸われないようフォーカスを外す
+        if let Some((target_field, mode)) = self.recording_shortcut {
+            // 録画中は TextEdit にフォーカスがあると Event::Text("c") で中身が "c" に書き換えられてしまうため、
+            // 全てのウィジェットからフォーカスを強制解除する
             if let Some(focused_id) = ui.ctx().memory(|m| m.focused()) {
                 ui.ctx().memory_mut(|m| m.surrender_focus(focused_id));
             }
 
             let current_mods = ui.input(|i| i.modifiers);
-            let super_held = ui.input(|i| is_super_down(i, None));
+            let super_held = self.super_key_latched || ui.input(detect_super_held);
             let events = ui.input(|i| i.events.clone());
 
             for ev in events {
@@ -766,8 +847,6 @@ impl PreferencesWindow {
                         modifiers,
                         ..
                     } => {
-                        let ev_super = super_held || modifiers.mac_cmd;
-                        // modifiers は Event 側のものと InputState 側の論理和をとる（複数修飾キー同時押し時の取りこぼし防止）
                         let merged_mods = egui::Modifiers {
                             alt: modifiers.alt || current_mods.alt,
                             ctrl: modifiers.ctrl || current_mods.ctrl,
@@ -775,6 +854,9 @@ impl PreferencesWindow {
                             mac_cmd: modifiers.mac_cmd || current_mods.mac_cmd,
                             command: modifiers.command || current_mods.command,
                         };
+                        let ev_super = super_held
+                            || merged_mods.mac_cmd
+                            || (merged_mods.command && !merged_mods.ctrl);
 
                         if key == egui::Key::Escape && merged_mods.is_none() && !ev_super {
                             cancel_recording = true;
@@ -783,38 +865,43 @@ impl PreferencesWindow {
                         if let Some(formatted) =
                             format_key_shortcut(key, physical_key, merged_mods, ev_super)
                         {
-                            recorded_binding = Some((target_field, formatted));
+                            recorded_binding = Some((target_field, mode, formatted));
                             break;
                         }
                     }
-                    // egui-winit が Ctrl+C / Ctrl+Shift+C 等を Event::Copy / Cut / Paste に変換してしまうケースへの対応
                     egui::Event::Copy => {
                         let mut mods = current_mods;
-                        mods.ctrl = true;
+                        if !super_held {
+                            mods.ctrl = true;
+                        }
                         if let Some(formatted) =
                             format_key_shortcut(egui::Key::C, Some(egui::Key::C), mods, super_held)
                         {
-                            recorded_binding = Some((target_field, formatted));
+                            recorded_binding = Some((target_field, mode, formatted));
                             break;
                         }
                     }
                     egui::Event::Cut => {
                         let mut mods = current_mods;
-                        mods.ctrl = true;
+                        if !super_held {
+                            mods.ctrl = true;
+                        }
                         if let Some(formatted) =
                             format_key_shortcut(egui::Key::X, Some(egui::Key::X), mods, super_held)
                         {
-                            recorded_binding = Some((target_field, formatted));
+                            recorded_binding = Some((target_field, mode, formatted));
                             break;
                         }
                     }
                     egui::Event::Paste(_) => {
                         let mut mods = current_mods;
-                        mods.ctrl = true;
+                        if !super_held {
+                            mods.ctrl = true;
+                        }
                         if let Some(formatted) =
                             format_key_shortcut(egui::Key::V, Some(egui::Key::V), mods, super_held)
                         {
-                            recorded_binding = Some((target_field, formatted));
+                            recorded_binding = Some((target_field, mode, formatted));
                             break;
                         }
                     }
@@ -825,11 +912,12 @@ impl PreferencesWindow {
         if cancel_recording {
             self.recording_shortcut = None;
         }
+
         let defaults = ShortcutSettings::default();
 
         egui::Grid::new("prefs_shortcuts_grid")
-            .num_columns(4)
-            .spacing([14.0, 10.0])
+            .num_columns(5)
+            .spacing([10.0, 10.0])
             .striped(true)
             .show(ui, |ui| {
                 changed |= shortcut_row(
@@ -1116,43 +1204,75 @@ fn shortcut_row(
     label: &str,
     value: &mut String,
     default_val: &str,
-    recording_shortcut: &mut Option<&'static str>,
-    recorded_binding: &Option<(&'static str, String)>,
+    recording_shortcut: &mut Option<(&'static str, RecordMode)>,
+    recorded_binding: &Option<(&'static str, RecordMode, String)>,
 ) -> bool {
     let mut changed = false;
-    if let Some((rec_id, new_sc)) = recorded_binding {
+    if let Some((rec_id, mode, new_sc)) = recorded_binding {
         if *rec_id == field_id {
-            *value = new_sc.clone();
+            match mode {
+                RecordMode::Replace => {
+                    *value = new_sc.clone();
+                }
+                RecordMode::Append => {
+                    let mut existing = split_shortcut_bindings(value);
+                    if !existing.iter().any(|s| s.eq_ignore_ascii_case(new_sc)) {
+                        existing.push(new_sc.clone());
+                    }
+                    *value = existing.join(" / ");
+                }
+            }
             *recording_shortcut = None;
             changed = true;
         }
     }
 
+    let is_recording_replace = *recording_shortcut == Some((field_id, RecordMode::Replace));
+    let is_recording_append = *recording_shortcut == Some((field_id, RecordMode::Append));
+    let any_recording_this = is_recording_replace || is_recording_append;
+
     ui.label(label);
 
+    // 録画中に TextEdit が Event::Text("c") 等を受け取って値を "c" で上書きしてしまうのを防ぐため interactive(!any_recording_this) にする
     let resp = ui.add(
         egui::TextEdit::singleline(value)
-            .desired_width(180.0)
-            .font(egui::TextStyle::Monospace),
+            .desired_width(200.0)
+            .font(egui::TextStyle::Monospace)
+            .interactive(!any_recording_this),
     );
-    if resp.changed() {
+    if resp.changed() && !any_recording_this {
         changed = true;
     }
 
-    let is_recording = *recording_shortcut == Some(field_id);
-    let btn_text = if is_recording {
-        egui::RichText::new(tr("Press keys... (Esc to cancel)"))
+    let rec_btn_text = if is_recording_replace {
+        egui::RichText::new(tr("Press keys... (Esc)"))
             .color(egui::Color32::from_rgb(250, 204, 21))
             .strong()
     } else {
         egui::RichText::new(tr("Record"))
     };
 
-    if ui.button(btn_text).clicked() {
-        if is_recording {
+    if ui.button(rec_btn_text).clicked() {
+        if is_recording_replace {
             *recording_shortcut = None;
         } else {
-            *recording_shortcut = Some(field_id);
+            *recording_shortcut = Some((field_id, RecordMode::Replace));
+        }
+    }
+
+    let add_btn_text = if is_recording_append {
+        egui::RichText::new(tr("Press keys... (Esc)"))
+            .color(egui::Color32::from_rgb(74, 222, 128))
+            .strong()
+    } else {
+        egui::RichText::new(tr("+ Add"))
+    };
+
+    if ui.button(add_btn_text).clicked() {
+        if is_recording_append {
+            *recording_shortcut = None;
+        } else {
+            *recording_shortcut = Some((field_id, RecordMode::Append));
         }
     }
 
