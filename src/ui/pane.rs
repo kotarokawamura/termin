@@ -265,27 +265,20 @@ impl TerminalPane {
         let term_font_size =
             (settings.effective_terminal_font_size() * self.zoom_scale).clamp(6.0, 64.0);
         let font_id = egui::FontId::monospace(term_font_size);
+        let term_font_size =
+            (settings.effective_terminal_font_size() * self.zoom_scale).clamp(6.0, 64.0);
+        let font_id = egui::FontId::monospace(term_font_size);
         let char_w = (term_font_size * 0.6).max(4.0);
 
-        let ref_galley = ui.painter().layout_no_wrap(
-            "hk~$日".to_string(),
-            font_id.clone(),
-            egui::Color32::WHITE,
-        );
-        let (ink_min_y, ink_max_y) = if ref_galley.mesh_bounds.height() > 1.0 {
-            (ref_galley.mesh_bounds.min.y, ref_galley.mesh_bounds.max.y)
-        } else {
-            let rh = ui.fonts_mut(|f| f.row_height(&font_id));
-            (0.0, rh)
-        };
-        let ink_h = (ink_max_y - ink_min_y).max(term_font_size * 0.85);
+        let ink_max_y = ui.fonts_mut(|f| f.row_height(&font_id));
+        let ink_h = ink_max_y.max(term_font_size * 0.85);
         let char_h = (ink_h + (term_font_size * 0.28).max(4.0))
             .round()
             .max(8.0);
-        let ink_center_y = (ink_min_y + ink_max_y) * 0.5;
-        let glyph_y_offset = (char_h * 0.5) - ink_center_y;
+        let glyph_y_offset = (char_h - ink_max_y) * 0.5;
         let pad = 4.0_f32;
 
+        let inner_w = (rect.width() - pad * 2.0).max(0.0);
         let inner_w = (rect.width() - pad * 2.0).max(0.0);
         let inner_h = (rect.height() - pad * 2.0).max(0.0);
         let new_cols = ((inner_w / char_w).floor() as u16).max(10);
@@ -443,42 +436,63 @@ impl TerminalPane {
         // 設定されたパネル背景色と透明度で塗りつぶす（デフォルトは #000000 の真っ黒）
         painter.rect_filled(full_rect, 0.0, settings.terminal_bg_color_with_opacity());
 
-        // Draw cells in two passes
+        // Draw cells in two passes (Batched by horizontal runs)
         let (rows, cols) = self.backend.size();
         let norm_selection = self.normalized_selection();
 
+        let is_default_bg = |cell: &crate::vte::RenderableCell, bg: crate::vte::RgbColor| -> bool {
+            !cell.inverse
+                && (bg == crate::vte::RgbColor(18, 18, 18) || bg == crate::vte::RgbColor(0, 0, 0))
+        };
+
+        // Pass 1: 非デフォルト背景色と選択範囲の矩形を横方向に結合して描画
         for r in 0..rows {
-            for c in 0..cols {
+            let row_y = rect.min.y + pad + (r as f32) * char_h;
+            let mut c = 0;
+            while c < cols {
                 let cell = self.backend.read_cell(r, c);
-                let cell_min = egui::pos2(
-                    rect.min.x + pad + (c as f32) * char_w,
-                    rect.min.y + pad + (r as f32) * char_h,
-                );
-                let cell_rect = egui::Rect::from_min_size(cell_min, egui::vec2(char_w, char_h));
+                let bg = if cell.inverse { cell.fg } else { cell.bg };
 
-                let (_fg, bg) = if cell.inverse {
-                    (cell.bg, cell.fg)
-                } else {
-                    (cell.fg, cell.bg)
-                };
-
-                // デフォルト背景色（(18, 18, 18) または (0, 0, 0) かつ非反転）のセルは個別に塗らず、
-                // 下地の terminal_bg_color_with_opacity をそのまま透過表示させる
-                let is_default_bg = !cell.inverse
-                    && (bg == crate::vte::RgbColor(18, 18, 18)
-                    || bg == crate::vte::RgbColor(0, 0, 0));
-                if !is_default_bg {
+                if !is_default_bg(&cell, bg) {
+                    let start_c = c;
+                    c += 1;
+                    while c < cols {
+                        let next_cell = self.backend.read_cell(r, c);
+                        let next_bg = if next_cell.inverse { next_cell.fg } else { next_cell.bg };
+                        if is_default_bg(&next_cell, next_bg) || next_bg != bg {
+                            break;
+                        }
+                        c += 1;
+                    }
+                    let run_rect = egui::Rect::from_min_size(
+                        egui::pos2(rect.min.x + pad + (start_c as f32) * char_w, row_y),
+                        egui::vec2(((c - start_c) as f32) * char_w, char_h),
+                    );
                     painter.rect_filled(
-                        cell_rect,
+                        run_rect,
                         0.0,
                         egui::Color32::from_rgb(bg.0, bg.1, bg.2),
                     );
+                } else {
+                    c += 1;
                 }
+            }
 
-                if let Some((start, end)) = norm_selection {
-                    if (r, c) >= start && (r, c) <= end {
+            if let Some((start, end)) = norm_selection {
+                if r >= start.0 && r <= end.0 {
+                    let sel_c_start = if r == start.0 { start.1 } else { 0 };
+                    let sel_c_end = if r == end.0 {
+                        end.1.min(cols.saturating_sub(1))
+                    } else {
+                        cols.saturating_sub(1)
+                    };
+                    if sel_c_start <= sel_c_end {
+                        let sel_rect = egui::Rect::from_min_size(
+                            egui::pos2(rect.min.x + pad + (sel_c_start as f32) * char_w, row_y),
+                            egui::vec2(((sel_c_end - sel_c_start + 1) as f32) * char_w, char_h),
+                        );
                         painter.rect_filled(
-                            cell_rect,
+                            sel_rect,
                             0.0,
                             egui::Color32::from_rgba_unmultiplied(70, 130, 210, 110),
                         );
@@ -487,52 +501,100 @@ impl TerminalPane {
             }
         }
 
+        // Pass 2: テキストと下線をバッチ描画
+        let mut run_text = String::with_capacity(cols as usize);
         for r in 0..rows {
-            for c in 0..cols {
+            let row_y = rect.min.y + pad + (r as f32) * char_h;
+            let mut c = 0;
+
+            while c < cols {
                 let cell = self.backend.read_cell(r, c);
-                if cell.wide_continuation {
+                if cell.wide_continuation
+                    || ((cell.ch == ' ' || cell.ch == '\0') && !cell.underline)
+                {
+                    c += 1;
                     continue;
                 }
 
-                let cell_min = egui::pos2(
-                    rect.min.x + pad + (c as f32) * char_w,
-                    rect.min.y + pad + (r as f32) * char_h,
-                );
-
-                let (mut fg, _bg) = if cell.inverse {
-                    (cell.bg, cell.fg)
-                } else {
-                    (cell.fg, cell.bg)
+                let resolve_fg = |cell: &crate::vte::RenderableCell| -> egui::Color32 {
+                    let mut fg = if cell.inverse { cell.bg } else { cell.fg };
+                    if cell.bold {
+                        fg = crate::vte::RgbColor(
+                            fg.0.saturating_add(25),
+                            fg.1.saturating_add(25),
+                            fg.2.saturating_add(25),
+                        );
+                    }
+                    egui::Color32::from_rgb(fg.0, fg.1, fg.2)
                 };
 
-                if cell.bold {
-                    fg = crate::vte::RgbColor(
-                        fg.0.saturating_add(25),
-                        fg.1.saturating_add(25),
-                        fg.2.saturating_add(25),
-                    );
+                let fg_color = resolve_fg(&cell);
+
+                // 全角文字（wide）は2セル幅を維持するため単独描画
+                if cell.wide {
+                    let cell_x = rect.min.x + pad + (c as f32) * char_w;
+                    if cell.ch != ' ' && cell.ch != '\0' {
+                        painter.text(
+                            egui::pos2(cell_x, row_y + glyph_y_offset),
+                            egui::Align2::LEFT_TOP,
+                            cell.ch,
+                            font_id.clone(),
+                            fg_color,
+                        );
+                    }
+                    if cell.underline {
+                        let y = (row_y + glyph_y_offset + ink_max_y).min(row_y + char_h - 1.0);
+                        painter.line_segment(
+                            [egui::pos2(cell_x, y), egui::pos2(cell_x + char_w * 2.0, y)],
+                            egui::Stroke::new(1.0, fg_color),
+                        );
+                    }
+                    c += 1;
+                    continue;
                 }
 
-                let fg_color = egui::Color32::from_rgb(fg.0, fg.1, fg.2);
+                // 半角文字：同一色・同一下線属性が続く限り1つの String に結合して1回で描画
+                let start_c = c;
+                let has_underline = cell.underline;
+                run_text.clear();
+                run_text.push(if cell.ch == '\0' { ' ' } else { cell.ch });
+                c += 1;
 
-                if cell.ch != ' ' && cell.ch != '\0' {
-                    painter.text(
-                        egui::pos2(cell_min.x, cell_min.y + glyph_y_offset),
-                        egui::Align2::LEFT_TOP,
-                        cell.ch,
-                        font_id.clone(),
-                        fg_color,
-                    );
+                while c < cols {
+                    let next = self.backend.read_cell(r, c);
+                    if next.wide || next.wide_continuation || next.underline != has_underline {
+                        break;
+                    }
+                    if (next.ch == ' ' || next.ch == '\0') && !has_underline {
+                        let peek_empty = (c + 1 >= cols) || {
+                            let peek = self.backend.read_cell(r, c + 1);
+                            peek.ch == ' ' || peek.ch == '\0'
+                        };
+                        if peek_empty {
+                            break;
+                        }
+                    }
+                    if resolve_fg(&next) != fg_color {
+                        break;
+                    }
+                    run_text.push(if next.ch == '\0' { ' ' } else { next.ch });
+                    c += 1;
                 }
 
-                if cell.underline {
-                    let width_cells = if cell.wide { 2.0 } else { 1.0 };
-                    let y = (cell_min.y + glyph_y_offset + ink_max_y).min(cell_min.y + char_h - 1.0);
+                let start_x = rect.min.x + pad + (start_c as f32) * char_w;
+                painter.text(
+                    egui::pos2(start_x, row_y + glyph_y_offset),
+                    egui::Align2::LEFT_TOP,
+                    &run_text,
+                    font_id.clone(),
+                    fg_color,
+                );
+
+                if has_underline {
+                    let y = (row_y + glyph_y_offset + ink_max_y).min(row_y + char_h - 1.0);
+                    let width_px = ((c - start_c) as f32) * char_w;
                     painter.line_segment(
-                        [
-                            egui::pos2(cell_min.x, y),
-                            egui::pos2(cell_min.x + char_w * width_cells, y),
-                        ],
+                        [egui::pos2(start_x, y), egui::pos2(start_x + width_px, y)],
                         egui::Stroke::new(1.0, fg_color),
                     );
                 }
@@ -694,6 +756,14 @@ impl TerminalPane {
 
 
     fn handle_keyboard_input(&mut self, ui: &mut egui::Ui, shortcut_handled: bool) {
+        if ui.input(|i| {
+            !i.events
+                .iter()
+                .any(|e| matches!(e, egui::Event::Text(_) | egui::Event::Paste(_)))
+        }) {
+            return;
+        }
+
         let events = ui.input(|i| i.events.clone());
         let current_mods = ui.input(|i| i.modifiers);
         let super_held = self.super_key_latched || ui.input(detect_super_held);
@@ -806,8 +876,23 @@ impl TerminalPane {
         ui: &mut egui::Ui,
         shortcuts: &ShortcutSettings,
     ) -> (bool, Option<TitleBarAction>) {
+        if ui.input(|i| {
+            !i.events.iter().any(|e| {
+                matches!(
+                    e,
+                    egui::Event::Key { pressed: true, .. }
+                        | egui::Event::Copy
+                        | egui::Event::Cut
+                        | egui::Event::Paste(_)
+                )
+            })
+        }) {
+            return (false, None);
+        }
+
         let mut action = None;
         let mut any_shortcut_consumed = false;
+        // ... (以降は今のコードのまま)
 
         let events = ui.input(|i| i.events.clone());
         let current_mods = ui.input(|i| i.modifiers);

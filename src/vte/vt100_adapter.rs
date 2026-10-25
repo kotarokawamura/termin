@@ -47,7 +47,10 @@ impl Vt100Adapter {
 
     pub fn process_bytes(&mut self, bytes: &[u8]) {
         self.parser.process(bytes);
-        self.refresh_max_scrollback();
+        let cursor_at_bottom = self.parser.screen().cursor_position().0 + 1 >= self.rows;
+        if cursor_at_bottom || bytes.contains(&b'\n') || bytes.contains(&0x1b) {
+            self.refresh_max_scrollback();
+        }
     }
 
     pub fn feed_bytes(&mut self, bytes: &[u8]) {
