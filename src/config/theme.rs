@@ -69,6 +69,7 @@ pub struct ThemeSettings {
     pub separator_color: String,
     pub separator_width: f32,
     pub frame_border_width: f32,
+    pub target_fps: u32,
 
     // Font configuration
     pub font_path: String,
@@ -95,6 +96,7 @@ impl Default for ThemeSettings {
             separator_color: String::new(),
             separator_width: 2.0,
             frame_border_width: 5.0,
+            target_fps: 30,
             font_path: default_debian_font_path().unwrap_or_default(),
             ui_font_size: 13.0,
             terminal_font_size: 14.0,
@@ -128,6 +130,9 @@ impl ThemeSettings {
                 if parsed.language.trim().is_empty() {
                     parsed.language = "auto".to_string();
                 }
+                if parsed.target_fps == 0 {
+                    parsed.target_fps = 30;
+                }
                 parsed.apply_language();
                 return parsed;
             }
@@ -151,6 +156,8 @@ impl ThemeSettings {
     pub fn apply_language(&self) {
         crate::i18n::set_active_language(&self.language, &self.custom_po_path);
     }
+
+
 
     /// Build `FontDefinitions` containing the primary font, CJK fallback, and any preview sample fonts.
     pub fn build_font_definitions(
@@ -292,6 +299,10 @@ impl ThemeSettings {
         self.separator_width.clamp(1.0, 16.0)
     }
 
+    pub fn effective_fps(&self) -> u32 {
+        self.target_fps.clamp(1, 240)
+    }
+    
     pub fn titlebar_bg(&self, is_active: bool) -> Color32 {
         if is_active {
             parse_color(&self.title_active_bg).unwrap_or(Color32::from_rgb(200, 0, 3))

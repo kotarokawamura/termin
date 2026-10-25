@@ -184,8 +184,16 @@ pub struct TerminApp {
 }
 
 impl TerminApp {
-    pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
-        let settings = ThemeSettings::load();
+    pub fn new(
+        cc: &eframe::CreationContext<'_>,
+        fps_override: Option<u32>,
+        open_prefs_on_startup: bool,
+    ) -> Self {
+        let mut settings = ThemeSettings::load();
+        if let Some(fps) = fps_override {
+            settings.target_fps = fps.clamp(1, 240);
+        }
+
         // Disable egui's global GUI zoom so Ctrl/Super + =/- only zooms the focused terminal pane
         cc.egui_ctx.options_mut(|o| o.zoom_with_keyboard = false);
         // Apply saved font family and sizes on startup
@@ -200,17 +208,19 @@ impl TerminApp {
             .and_then(|h| X11PinchListener::try_new(h.as_raw()));
         let x11_pinch_init_attempted = x11_pinch_listener.is_some();
 
+        let mut prefs_window = PreferencesWindow::default();
+        prefs_window.open = open_prefs_on_startup;
+
         Self {
             settings,
             workspace: Workspace::new(),
-            prefs_window: PreferencesWindow::default(),
+            prefs_window,
             menu_manager: MenuManager::new(),
             x11_pinch_listener,
             x11_pinch_init_attempted,
             startup_focus_frames: 10,
         }
     }
-
     /// Handle custom borderless window edge and corner resizing.
     fn handle_custom_resize_frame(&self, ctx: &egui::Context) {
         if self.prefs_window.any_open()
@@ -313,8 +323,8 @@ impl eframe::App for TerminApp {
             ctx.request_repaint();
         }
 
-        // 33FPS
-        ctx.request_repaint_after(std::time::Duration::from_millis(30));
+        let fps = self.settings.effective_fps() as u64;
+        ctx.request_repaint_after(std::time::Duration::from_millis((1000 / fps).max(1)));
 
         self.handle_custom_resize_frame(&ctx);
 

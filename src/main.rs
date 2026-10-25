@@ -23,7 +23,35 @@ mod vte;
 use eframe::egui;
 use ui::app::TerminApp;
 
+fn parse_cli_args() -> (Option<u32>, bool) {
+    let mut fps_override = None;
+    let mut open_prefs = false;
+    let mut args = std::env::args().skip(1);
+
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "--fps" | "-f" => {
+                if let Some(val) = args.next().and_then(|s| s.parse::<u32>().ok()) {
+                    fps_override = Some(val.clamp(1, 240));
+                }
+            }
+            "--prefs" => {
+                open_prefs = true;
+            }
+            s if s.starts_with("--fps=") => {
+                if let Ok(val) = s["--fps=".len()..].parse::<u32>() {
+                    fps_override = Some(val.clamp(1, 240));
+                }
+            }
+            _ => {}
+        }
+    }
+    (fps_override, open_prefs)
+}
+
 fn main() -> Result<(), eframe::Error> {
+    let (fps_override, open_prefs) = parse_cli_args();
+
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title("termin")
@@ -37,6 +65,6 @@ fn main() -> Result<(), eframe::Error> {
     eframe::run_native(
         "termin",
         options,
-        Box::new(|cc| Ok(Box::new(TerminApp::new(cc)))),
+        Box::new(move |cc| Ok(Box::new(TerminApp::new(cc, fps_override, open_prefs)))),
     )
 }

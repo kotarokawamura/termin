@@ -339,7 +339,18 @@ impl PreferencesWindow {
                     changed = true;
                 }
                 ui.end_row();
-            });
+
+                ui.label(tr("Target FPS:"));
+                if ui
+                    .add(
+                        egui::Slider::new(&mut settings.target_fps, 1..=240)
+                            .suffix(" FPS"),
+                    )
+                    .changed()
+                {
+                    changed = true;
+                }
+                ui.end_row();            });
 
         changed
     }
