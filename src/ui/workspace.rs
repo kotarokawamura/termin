@@ -36,6 +36,7 @@ pub struct Workspace {
     pub(crate) recorded_rects: HashMap<TileId, egui::Rect>,
     pub moving_tile: Option<TileId>,
     pub pty_wakeup_ctx: Option<egui::Context>,
+    pub toggle_prefs_collapse_requested: bool,
 }
 
 impl Workspace {
@@ -63,6 +64,7 @@ impl Workspace {
             recorded_rects: HashMap::new(),
             moving_tile: None,
             pty_wakeup_ctx,
+            toggle_prefs_collapse_requested: false,
         }
     }
 
@@ -280,6 +282,15 @@ impl Workspace {
                     pane.zoom_reset();
                 }
             }
+            TitleBarAction::OpenPreferences => {
+                *prefs_open = true;
+            }
+            TitleBarAction::ClosePreferences => {
+                *prefs_open = false;
+            }
+            TitleBarAction::ToggleCollapsePreferences => {
+                self.toggle_prefs_collapse_requested = true;
+            }
         }
     }
 }
@@ -338,6 +349,20 @@ impl<'a> egui_tiles::Behavior<TerminalPane> for TreeBehavior<'a> {
                         *self.prefs_open = true;
                     } else {
                         self.pending_action = Some((tile_id, action));
+                    }
+                }
+                // TreeBehavior::pane_ui 内:
+                if let Some(action) = output.action {
+                    match action {
+                        TitleBarAction::OpenPreferences => {
+                            *self.prefs_open = true;
+                        }
+                        TitleBarAction::ClosePreferences => {
+                            *self.prefs_open = false;
+                        }
+                        other => {
+                            self.pending_action = Some((tile_id, other));
+                        }
                     }
                 }
             }

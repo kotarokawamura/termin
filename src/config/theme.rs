@@ -556,7 +556,85 @@ pub fn is_super_down(i: &egui::InputState, event_mods: Option<egui::Modifiers>) 
         || i.key_down(egui::Key::SuperRight)
 }
 
-/// 現在の egui InputState およびイベント一覧から Super (Meta / Windows / Command) キーが押されているか判定する
+/// キーがプレフィックス（修飾）キー単体であるか判定する。
+/// egui のバージョンによって ShiftLeft / ControlLeft 等のバリアントが存在するため、
+/// Debug 文字列も含めて全ての修飾キー単体を確実に弾く。
+pub fn is_modifier_only_key(key: egui::Key) -> bool {
+    let name = format!("{:?}", key);
+    let upper = name.to_ascii_uppercase();
+    matches!(
+        upper.as_str(),
+        "SHIFT"
+            | "SHIFTLEFT"
+            | "SHIFTRIGHT"
+            | "LSHIFT"
+            | "RSHIFT"
+            | "CONTROL"
+            | "CONTROLLEFT"
+            | "CONTROLRIGHT"
+            | "CTRL"
+            | "CTRLLEFT"
+            | "CTRLRIGHT"
+            | "LCTRL"
+            | "RCTRL"
+            | "ALT"
+            | "ALTLEFT"
+            | "ALTRIGHT"
+            | "LALT"
+            | "RALT"
+            | "ALTGR"
+            | "SUPER"
+            | "SUPERLEFT"
+            | "SUPERRIGHT"
+            | "LSUPER"
+            | "RSUPER"
+            | "META"
+            | "METALEFT"
+            | "METARIGHT"
+            | "COMMAND"
+            | "HYPER"
+            | "CAPSLOCK"
+            | "NUMLOCK"
+            | "SCROLLLOCK"
+    )
+}
+
+/// X11 / XWayland サーバーに現在のモディファイアマスク（Mod4 = Super）またはキーマップを問い合わせる。
+/// Wayland (XWayland) や X11 環境で winit が Super キーイベントを取りこぼす場合の確実なフォールバック。
+fn query_x11_super_pressed() -> bool {
+    use std::sync::Mutex;
+    use x11rb::connection::Connection as _;
+    use x11rb::protocol::xproto::ConnectionExt as _;
+    use x11rb::rust_connection::RustConnection;
+
+    static X11_CONN: Mutex<Option<(RustConnection, u32)>> = Mutex::new(None);
+
+    let Ok(mut guard) = X11_CONN.lock() else {
+        return false;
+    };
+    if guard.is_none() {
+        if let Ok((conn, screen_num)) = RustConnection::connect(None) {
+            if let Some(screen) = conn.setup().roots.get(screen_num) {
+                let root = screen.root;
+                *guard = Some((conn, root));
+            }
+        }
+    }
+    if let Some((conn, root)) = guard.as_ref() {
+        if let Ok(cookie) = conn.query_pointer(*root) {
+            if let Ok(reply) = cookie.reply() {
+                // X11 の Mod4Mask (1 << 6 = 0x0040) は Super / Windows / Meta キーに対応する
+                let mask_bits: u16 = reply.mask.into();
+                if (mask_bits & (1 << 6)) != 0 {
+                    return true;
+                }
+            }
+        }
+    }
+    false
+}
+
+/// 現在の egui InputState および OS 状態から Super (Meta / Windows / Command) キーが押されているか判定する
 pub fn detect_super_held(i: &egui::InputState) -> bool {
     if i.modifiers.mac_cmd
         || i.key_down(egui::Key::SuperLeft)
@@ -564,9 +642,14 @@ pub fn detect_super_held(i: &egui::InputState) -> bool {
     {
         return true;
     }
-    // Linux (X11/Wayland) では Ctrl が押されていないのに command フラグだけが立つケースがある（Superがcommandにマップされる）
     if i.modifiers.command && !i.modifiers.ctrl {
         return true;
+    }
+    for key in &i.keys_down {
+        let name = format!("{:?}", key).to_ascii_uppercase();
+        if name.contains("SUPER") || name.contains("META") || name.contains("LOGO") {
+            return true;
+        }
     }
     for ev in &i.events {
         if let egui::Event::Key {
@@ -589,6 +672,19 @@ pub fn detect_super_held(i: &egui::InputState) -> bool {
             }
         }
     }
+    // キーイベントが発生しているフレームでは X11/XWayland の Mod4Mask も確認する
+    let has_key_or_copy_event = i.events.iter().any(|ev| {
+        matches!(
+            ev,
+            egui::Event::Key { pressed: true, .. }
+                | egui::Event::Copy
+                | egui::Event::Cut
+                | egui::Event::Paste(_)
+        )
+    });
+    if has_key_or_copy_event && query_x11_super_pressed() {
+        return true;
+    }
     false
 }
 
@@ -601,13 +697,10 @@ pub fn split_shortcut_bindings(binding: &str) -> Vec<String> {
         if s.is_empty() {
             continue;
         }
-        // `Ctrl+,` のように `+` の直後に `,` が来るケースを保護しつつ `,` で分割する
         let mut current = String::new();
-        let mut chars = s.chars().peekable();
-        while let Some(ch) = chars.next() {
+        for ch in s.chars() {
             if ch == ',' {
                 let prev_non_space = current.trim_end().chars().last();
-                // 直前が '+' ならキーとしてのカンマ（例: "Ctrl+,"）なので分割しない
                 if prev_non_space == Some('+') || current.trim().is_empty() {
                     current.push(ch);
                 } else {
@@ -637,6 +730,9 @@ pub fn shortcut_matches_event(
     modifiers: egui::Modifiers,
     super_held: bool,
 ) -> bool {
+    if is_modifier_only_key(key) {
+        return false;
+    }
     for part in split_shortcut_bindings(binding) {
         if single_shortcut_matches(&part, key, physical_key, modifiers, super_held) {
             return true;
@@ -810,17 +906,18 @@ pub fn parse_key_token(token: &str) -> Option<egui::Key> {
 }
 
 /// Format a pressed key + modifiers into a human-readable shortcut string (e.g. `"Super+C"`, `"Ctrl+Shift+T"`).
+/// 修飾キー（Ctrl / Shift / Alt / Super 等）単体が押された時点では `None` を返し、レコードを確定させない。
 pub fn format_key_shortcut(
     key: egui::Key,
     physical_key: Option<egui::Key>,
     modifiers: egui::Modifiers,
     super_held: bool,
 ) -> Option<String> {
-    if matches!(key, egui::Key::SuperLeft | egui::Key::SuperRight) {
+    if is_modifier_only_key(key) {
         return None;
     }
     let effective_key = physical_key.unwrap_or(key);
-    if matches!(effective_key, egui::Key::SuperLeft | egui::Key::SuperRight) {
+    if is_modifier_only_key(effective_key) {
         return None;
     }
 

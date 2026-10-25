@@ -18,10 +18,11 @@ use std::fs;
 use std::sync::Arc;
 use eframe::egui;
 // ファイル冒頭の import を更新
+// ファイル冒頭の import
 use crate::config::theme::{
     color_to_hex, detect_super_held, discover_system_fonts, format_key_shortcut, is_cjk_font,
-    is_monospace_font, is_valid_font_bytes, parse_color, split_shortcut_bindings, ShortcutSettings,
-    ThemeSettings,
+    is_modifier_only_key, is_monospace_font, is_valid_font_bytes, parse_color,
+    shortcut_matches_event, split_shortcut_bindings, ShortcutSettings, ThemeSettings,
 };
 use crate::i18n::{active_catalog_info, discover_po_files, tr};
 
@@ -51,6 +52,7 @@ pub enum RecordMode {
 #[derive(Default)]
 pub struct PreferencesWindow {
     pub open: bool,
+    pub toggle_collapse_requested: bool,
     pub font_sample_window_open: bool,
     pub active_tab: PrefsTab,
     pub available_fonts: Vec<(String, String)>,
@@ -137,6 +139,91 @@ impl PreferencesWindow {
         if self.sample_text_cjk.is_empty() {
             self.sample_text_cjk =
                 "Japanese: 日本語テキストの表示テスト（コピー・ペースト・ペイン分割）".to_string();
+        }
+
+        // Super キーの押下ラッチを毎フレーム更新
+        ctx.input(|i| {
+            for ev in &i.events {
+                if let egui::Event::Key {
+                    key,
+                    physical_key,
+                    pressed,
+                    ..
+                } = ev
+                {
+                    if matches!(key, egui::Key::SuperLeft | egui::Key::SuperRight)
+                        || matches!(
+                            physical_key,
+                            Some(egui::Key::SuperLeft | egui::Key::SuperRight)
+                        )
+                    {
+                        self.super_key_latched = *pressed;
+                    }
+                }
+            }
+            if !i.focused {
+                self.super_key_latched = false;
+            }
+        });
+
+        // 設定画面が開いており、かつショートカット録画中・TextEdit入力中でない場合、
+        // 設定画面上にフォーカスやカーソルがあっても「設定を閉じる」「設定をタイトルバー化」ショートカットを受け付ける
+        if self.open && self.recording_shortcut.is_none() && !ctx.egui_wants_keyboard_input() {
+            let current_mods = ctx.input(|i| i.modifiers);
+            let super_held = self.super_key_latched || ctx.input(detect_super_held);
+            let events = ctx.input(|i| i.events.clone());
+            for ev in events {
+                if let egui::Event::Key {
+                    key,
+                    physical_key,
+                    pressed: true,
+                    modifiers,
+                    ..
+                } = ev
+                {
+                    let merged_mods = egui::Modifiers {
+                        alt: modifiers.alt || current_mods.alt,
+                        ctrl: modifiers.ctrl || current_mods.ctrl,
+                        shift: modifiers.shift || current_mods.shift,
+                        mac_cmd: modifiers.mac_cmd || current_mods.mac_cmd,
+                        command: modifiers.command || current_mods.command,
+                    };
+                    let ev_super = super_held
+                        || merged_mods.mac_cmd
+                        || (merged_mods.command && !merged_mods.ctrl);
+
+                    if shortcut_matches_event(
+                        &settings.shortcuts.close_preferences,
+                        key,
+                        physical_key,
+                        merged_mods,
+                        ev_super,
+                    ) {
+                        self.open = false;
+                    } else if shortcut_matches_event(
+                        &settings.shortcuts.toggle_collapse_preferences,
+                        key,
+                        physical_key,
+                        merged_mods,
+                        ev_super,
+                    ) {
+                        self.toggle_collapse_requested = true;
+                    }
+                }
+            }
+        }
+
+        let prefs_win_id = egui::Id::new("custom_drag_bar_prefs_window_v2");
+        if self.toggle_collapse_requested {
+            self.toggle_collapse_requested = false;
+            if !self.open {
+                self.open = true;
+            } else if let Some(mut state) =
+                egui::collapsing_header::CollapsingState::load(ctx, prefs_win_id)
+            {
+                state.set_open(!state.is_open());
+                state.store(ctx);
+            }
         }
 
         let mut is_open = self.open;
@@ -862,6 +949,12 @@ impl PreferencesWindow {
                             cancel_recording = true;
                             break;
                         }
+                        // 修飾キー（Ctrl / Shift / Alt / Super）単体が押された段階では絶対に確定させない
+                        if is_modifier_only_key(key)
+                            || physical_key.is_some_and(is_modifier_only_key)
+                        {
+                            continue;
+                        }
                         if let Some(formatted) =
                             format_key_shortcut(key, physical_key, merged_mods, ev_super)
                         {
@@ -992,12 +1085,31 @@ impl PreferencesWindow {
                     &mut self.recording_shortcut,
                     &recorded_binding,
                 );
+
                 changed |= shortcut_row(
                     ui,
                     "open_preferences",
                     &tr("Open Preferences:"),
                     &mut settings.shortcuts.open_preferences,
                     &defaults.open_preferences,
+                    &mut self.recording_shortcut,
+                    &recorded_binding,
+                );
+                changed |= shortcut_row(
+                    ui,
+                    "close_preferences",
+                    &tr("Close Preferences:"),
+                    &mut settings.shortcuts.close_preferences,
+                    &defaults.close_preferences,
+                    &mut self.recording_shortcut,
+                    &recorded_binding,
+                );
+                changed |= shortcut_row(
+                    ui,
+                    "toggle_collapse_preferences",
+                    &tr("Collapse/Expand Preferences:"),
+                    &mut settings.shortcuts.toggle_collapse_preferences,
+                    &defaults.toggle_collapse_preferences,
                     &mut self.recording_shortcut,
                     &recorded_binding,
                 );

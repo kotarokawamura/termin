@@ -384,6 +384,11 @@ impl eframe::App for TerminApp {
                 prefs_dragging,
                 external_zoom_delta,
             );
+            if self.workspace.toggle_prefs_collapse_requested {
+                self.workspace.toggle_prefs_collapse_requested = false;
+                self.prefs_window.toggle_collapse_requested = true;
+                ctx.request_repaint();
+            }
         });
     }
 }

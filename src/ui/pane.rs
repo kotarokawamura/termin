@@ -777,6 +777,15 @@ impl TerminalPane {
         if shortcut_matches_event(&shortcuts.open_preferences, key, physical_key, modifiers, super_held) {
             return (true, Some(TitleBarAction::OpenPreferences));
         }
+        if shortcut_matches_event(&shortcuts.close_preferences, key, physical_key, modifiers, super_held) {
+            return (true, Some(TitleBarAction::ClosePreferences));
+        }
+        if shortcut_matches_event(&shortcuts.toggle_collapse_preferences, key, physical_key, modifiers, super_held) {
+            return (true, Some(TitleBarAction::ToggleCollapsePreferences));
+        }
+        if shortcut_matches_event(&shortcuts.open_preferences, key, physical_key, modifiers, super_held) {
+            return (true, Some(TitleBarAction::OpenPreferences));
+        }
         if shortcut_matches_event(&shortcuts.toggle_fullscreen, key, physical_key, modifiers, super_held) {
             return (true, Some(TitleBarAction::ToggleMaximizeWindow));
         }

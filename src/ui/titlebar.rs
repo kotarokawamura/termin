@@ -35,10 +35,12 @@ pub enum TitleBarAction {
     FocusPrevPane,
     SaveLayout,
     LoadLayout,
-    OpenPreferences,
     ZoomIn,
     ZoomOut,
     ZoomReset,
+    OpenPreferences,
+    ClosePreferences,
+    ToggleCollapsePreferences,
 }
 
 pub struct TitleBarOutput {
