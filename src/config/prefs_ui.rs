@@ -19,7 +19,7 @@ use std::sync::Arc;
 use eframe::egui;
 use crate::config::theme::{
     color_to_hex, discover_system_fonts, format_key_shortcut, is_cjk_font, is_monospace_font,
-    is_valid_font_bytes, parse_color, ShortcutSettings, ThemeSettings,
+    is_valid_font_bytes, parse_color, ShortcutSettings, ThemeSettings,is_super_down
 };
 use crate::i18n::{active_catalog_info, discover_po_files, tr};
 
@@ -740,7 +740,7 @@ impl PreferencesWindow {
 
         ui.label(tr(
             "Configure keyboard shortcuts for terminal and workspace actions.\n\
-             You can type a shortcut directly (e.g. Ctrl+Shift+T, Alt+D, F11) or click 'Record' and press a key combination.",
+             You can type a shortcut directly (e.g. Ctrl+Shift+T, Super+Enter, Alt+D, F11) or click 'Record' and press a key combination.",
         ));
         ui.add_space(10.0);
 
@@ -748,35 +748,83 @@ impl PreferencesWindow {
         let mut recorded_binding: Option<(&'static str, String)> = None;
         let mut cancel_recording = false;
         if let Some(target_field) = self.recording_shortcut {
-            let super_held = ui.input(|i| {
-                i.key_down(egui::Key::SuperLeft)
-                    || i.key_down(egui::Key::SuperRight)
-                    || i.modifiers.mac_cmd
-            });
+            // 録画中は TextEdit 等にキー入力が吸われないようフォーカスを外す
+            if let Some(focused_id) = ui.ctx().memory(|m| m.focused()) {
+                ui.ctx().memory_mut(|m| m.surrender_focus(focused_id));
+            }
+
+            let current_mods = ui.input(|i| i.modifiers);
+            let super_held = ui.input(|i| is_super_down(i, None));
             let events = ui.input(|i| i.events.clone());
+
             for ev in events {
-                if let egui::Event::Key {
-                    key,
-                    pressed: true,
-                    modifiers,
-                    ..
-                } = ev
-                {
-                    if key == egui::Key::Escape && modifiers.is_none() && !super_held {
-                        cancel_recording = true;
-                        break;
+                match ev {
+                    egui::Event::Key {
+                        key,
+                        physical_key,
+                        pressed: true,
+                        modifiers,
+                        ..
+                    } => {
+                        let ev_super = super_held || modifiers.mac_cmd;
+                        // modifiers は Event 側のものと InputState 側の論理和をとる（複数修飾キー同時押し時の取りこぼし防止）
+                        let merged_mods = egui::Modifiers {
+                            alt: modifiers.alt || current_mods.alt,
+                            ctrl: modifiers.ctrl || current_mods.ctrl,
+                            shift: modifiers.shift || current_mods.shift,
+                            mac_cmd: modifiers.mac_cmd || current_mods.mac_cmd,
+                            command: modifiers.command || current_mods.command,
+                        };
+
+                        if key == egui::Key::Escape && merged_mods.is_none() && !ev_super {
+                            cancel_recording = true;
+                            break;
+                        }
+                        if let Some(formatted) =
+                            format_key_shortcut(key, physical_key, merged_mods, ev_super)
+                        {
+                            recorded_binding = Some((target_field, formatted));
+                            break;
+                        }
                     }
-                    if let Some(formatted) = format_key_shortcut(key, modifiers, super_held) {
-                        recorded_binding = Some((target_field, formatted));
-                        break;
+                    // egui-winit が Ctrl+C / Ctrl+Shift+C 等を Event::Copy / Cut / Paste に変換してしまうケースへの対応
+                    egui::Event::Copy => {
+                        let mut mods = current_mods;
+                        mods.ctrl = true;
+                        if let Some(formatted) =
+                            format_key_shortcut(egui::Key::C, Some(egui::Key::C), mods, super_held)
+                        {
+                            recorded_binding = Some((target_field, formatted));
+                            break;
+                        }
                     }
+                    egui::Event::Cut => {
+                        let mut mods = current_mods;
+                        mods.ctrl = true;
+                        if let Some(formatted) =
+                            format_key_shortcut(egui::Key::X, Some(egui::Key::X), mods, super_held)
+                        {
+                            recorded_binding = Some((target_field, formatted));
+                            break;
+                        }
+                    }
+                    egui::Event::Paste(_) => {
+                        let mut mods = current_mods;
+                        mods.ctrl = true;
+                        if let Some(formatted) =
+                            format_key_shortcut(egui::Key::V, Some(egui::Key::V), mods, super_held)
+                        {
+                            recorded_binding = Some((target_field, formatted));
+                            break;
+                        }
+                    }
+                    _ => {}
                 }
             }
         }
         if cancel_recording {
             self.recording_shortcut = None;
         }
-
         let defaults = ShortcutSettings::default();
 
         egui::Grid::new("prefs_shortcuts_grid")

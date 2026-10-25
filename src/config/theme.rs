@@ -523,8 +523,17 @@ pub fn color_to_hex(c: Color32) -> String {
     format!("#{:02x}{:02x}{:02x}", c.r(), c.g(), c.b())
 }
 
-/// Checks if a keyboard event matches a configured shortcut string (e.g., `"Ctrl+Shift+C"`, `"Alt+D"`, `"F11"`).
-/// Multiple bindings can be separated by `/` or `,` (e.g., `"Ctrl+Shift+E / Alt+D"`).
+/// 現在の入力状態から Super (Win / Meta / Command) キーが押されているか判定するヘルパー
+pub fn is_super_down(i: &egui::InputState, event_mods: Option<egui::Modifiers>) -> bool {
+    let in_mods = event_mods.is_some_and(|m| m.mac_cmd);
+    in_mods
+        || i.modifiers.mac_cmd
+        || i.key_down(egui::Key::SuperLeft)
+        || i.key_down(egui::Key::SuperRight)
+}
+
+/// Checks if a keyboard event matches a configured shortcut string (e.g., `"Ctrl+Shift+C"`, `"Super+Enter"`, `"Alt+D"`, `"F11"`).
+/// Multiple bindings can be separated by `/` or `|` (e.g., `"Ctrl+Shift+E / Alt+D"`).
 pub fn shortcut_matches_event(
     binding: &str,
     key: egui::Key,
@@ -554,52 +563,49 @@ fn single_shortcut_matches(
     let mut want_shift = false;
     let mut want_alt = false;
     let mut want_super = false;
-    let key_token: &str;
 
-    // Handle trailing `+` or `-` keys like `"Ctrl+="`, `"Ctrl++"`, `"Ctrl+-"`
-    let s = binding.trim();
-    let mut rest = s;
-    loop {
-        if let Some((prefix, after)) = rest.split_once('+') {
-            let p_low = prefix.trim().to_ascii_lowercase();
-            match p_low.as_str() {
-                "ctrl" | "control" => {
-                    want_ctrl = true;
-                    rest = after;
-                    continue;
-                }
-                "shift" => {
-                    want_shift = true;
-                    rest = after;
-                    continue;
-                }
-                "alt" | "meta" => {
-                    want_alt = true;
-                    rest = after;
-                    continue;
-                }
-                "super" | "win" | "cmd" | "command" => {
-                    want_super = true;
-                    rest = after;
-                    continue;
-                }
-                _ => {}
-            }
-        }
-        key_token = rest.trim();
-        break;
-    }
-
-    if key_token.is_empty() {
+    let mut rest = binding.trim();
+    if rest.is_empty() {
         return false;
     }
 
-    let has_super = super_held || modifiers.mac_cmd;
-    if modifiers.ctrl != want_ctrl
-        || modifiers.shift != want_shift
-        || modifiers.alt != want_alt
-        || has_super != want_super
-    {
+    // プレフィックス（修飾キー）を順番に剥がす。
+    // ただし `Ctrl++` のようにキー自体が `+` のケースを壊さないよう、
+    // `after` が空文字列になる場合は分割せずキー本体として残す。
+    loop {
+        let Some((prefix, after)) = rest.split_once('+') else {
+            break;
+        };
+        let after_trimmed = after.trim();
+        if after_trimmed.is_empty() {
+            // 例: rest が "+" のみ、または末尾が "+" の場合
+            break;
+        }
+
+        let p_low = prefix.trim().to_ascii_lowercase();
+        match p_low.as_str() {
+            "ctrl" | "control" | "ctl" => {
+                want_ctrl = true;
+                rest = after_trimmed;
+            }
+            "shift" | "shft" => {
+                want_shift = true;
+                rest = after_trimmed;
+            }
+            "alt" | "option" | "opt" => {
+                want_alt = true;
+                rest = after_trimmed;
+            }
+            "super" | "win" | "windows" | "meta" | "cmd" | "command" | "logo" => {
+                want_super = true;
+                rest = after_trimmed;
+            }
+            _ => break,
+        }
+    }
+
+    let key_token = rest.trim();
+    if key_token.is_empty() {
         return false;
     }
 
@@ -607,16 +613,31 @@ fn single_shortcut_matches(
         return false;
     };
 
+    let has_super = super_held || modifiers.mac_cmd;
+    let has_ctrl = modifiers.ctrl || (modifiers.command && !has_super);
+
+    if has_ctrl != want_ctrl
+        || modifiers.shift != want_shift
+        || modifiers.alt != want_alt
+        || has_super != want_super
+    {
+        return false;
+    }
+
+    // physical_key と論理 key のどちらかで一致すればOKとする。
+    // （Shift押下時に物理キーは Key::C や Key::Equals のままだが論理キーが変わるケースに対応）
     if key == target_key || physical_key == Some(target_key) {
         return true;
     }
-    // Treat Plus and Equals as equivalent for zoom shortcuts
+
+    // Zoom 等でよく使われる `+` / `=` / `;` (JIS配列の+) の揺れを吸収
     if matches!(target_key, egui::Key::Plus | egui::Key::Equals)
         && (matches!(key, egui::Key::Plus | egui::Key::Equals)
-            || matches!(physical_key, Some(egui::Key::Plus | egui::Key::Equals)))
+        || matches!(physical_key, Some(egui::Key::Plus | egui::Key::Equals)))
     {
         return true;
     }
+
     false
 }
 
@@ -662,7 +683,7 @@ pub fn parse_key_token(token: &str) -> Option<egui::Key> {
         "TAB" => Some(egui::Key::Tab),
         "ENTER" | "RETURN" => Some(egui::Key::Enter),
         "SPACE" => Some(egui::Key::Space),
-        "BACKSPACE" => Some(egui::Key::Backspace),
+        "BACKSPACE" | "BS" => Some(egui::Key::Backspace),
         "ESCAPE" | "ESC" => Some(egui::Key::Escape),
         "INSERT" | "INS" => Some(egui::Key::Insert),
         "DELETE" | "DEL" => Some(egui::Key::Delete),
@@ -678,7 +699,10 @@ pub fn parse_key_token(token: &str) -> Option<egui::Key> {
         "." | "PERIOD" => Some(egui::Key::Period),
         "/" | "SLASH" => Some(egui::Key::Slash),
         ";" | "SEMICOLON" => Some(egui::Key::Semicolon),
-        "=" | "EQUALS" | "+" | "PLUS" => Some(egui::Key::Equals),
+        "'" | "QUOTE" => Some(egui::Key::Quote),
+        "`" | "BACKTICK" => Some(egui::Key::Backtick),
+        "=" | "EQUALS" => Some(egui::Key::Equals),
+        "+" | "PLUS" => Some(egui::Key::Plus),
         "-" | "MINUS" => Some(egui::Key::Minus),
         "[" | "OPENBRACKET" => Some(egui::Key::OpenBracket),
         "]" | "CLOSEBRACKET" => Some(egui::Key::CloseBracket),
@@ -699,24 +723,33 @@ pub fn parse_key_token(token: &str) -> Option<egui::Key> {
     }
 }
 
-/// Format a pressed key + modifiers into a human-readable shortcut string (e.g. `"Ctrl+Shift+T"`).
+/// Format a pressed key + modifiers into a human-readable shortcut string (e.g. `"Super+Ctrl+Shift+T"`).
 pub fn format_key_shortcut(
     key: egui::Key,
+    physical_key: Option<egui::Key>,
     modifiers: egui::Modifiers,
     super_held: bool,
 ) -> Option<String> {
-    if matches!(
-        key,
-        egui::Key::SuperLeft | egui::Key::SuperRight
-    ) {
+    // Super 単体押下は無視する
+    if matches!(key, egui::Key::SuperLeft | egui::Key::SuperRight) {
         return None;
     }
-    let key_str = match key {
+
+    // Shift と同時押しした際に論理 key が記号に化けるのを防ぐため physical_key を優先する
+    let effective_key = physical_key.unwrap_or(key);
+    if matches!(effective_key, egui::Key::SuperLeft | egui::Key::SuperRight) {
+        return None;
+    }
+
+    let key_str = match effective_key {
         egui::Key::Comma => ",".to_string(),
         egui::Key::Period => ".".to_string(),
         egui::Key::Slash => "/".to_string(),
         egui::Key::Semicolon => ";".to_string(),
-        egui::Key::Equals | egui::Key::Plus => "=".to_string(),
+        egui::Key::Quote => "'".to_string(),
+        egui::Key::Backtick => "`".to_string(),
+        egui::Key::Equals => "=".to_string(),
+        egui::Key::Plus => "+".to_string(),
         egui::Key::Minus => "-".to_string(),
         egui::Key::OpenBracket => "[".to_string(),
         egui::Key::CloseBracket => "]".to_string(),
@@ -734,11 +767,14 @@ pub fn format_key_shortcut(
         other => format!("{:?}", other),
     };
 
+    let has_super = super_held || modifiers.mac_cmd;
+    let has_ctrl = modifiers.ctrl || (modifiers.command && !has_super);
+
     let mut parts = Vec::new();
-    if super_held || modifiers.mac_cmd {
+    if has_super {
         parts.push("Super".to_string());
     }
-    if modifiers.ctrl {
+    if has_ctrl {
         parts.push("Ctrl".to_string());
     }
     if modifiers.alt {

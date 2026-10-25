@@ -14,7 +14,7 @@
 // along with this program; if not, write to the Free Software
 // Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
 use eframe::egui;
-use crate::config::theme::{shortcut_matches_event, ShortcutSettings, ThemeSettings};
+use crate::config::theme::{is_super_down, shortcut_matches_event, ShortcutSettings, ThemeSettings};
 use crate::menus::{
     MenuManager,
     types::{MenuAction, MenuContext},
@@ -395,8 +395,10 @@ impl TerminalPane {
                     ui.ctx().memory_mut(|m| m.surrender_focus(focused_id));
                 }
             }
-            shortcut_key_action = self.handle_shortcut_keyboard_input(ui, &settings.shortcuts);
-            self.handle_keyboard_input(ui, shortcut_key_action.is_some());
+            let (shortcut_consumed, act) =
+                self.handle_shortcut_keyboard_input(ui, &settings.shortcuts);
+            shortcut_key_action = act;
+            self.handle_keyboard_input(ui, shortcut_consumed || shortcut_key_action.is_some());
         } else if self.pending_paste {
             self.handle_keyboard_input(ui, true);
         }
@@ -650,17 +652,14 @@ impl TerminalPane {
 
     fn handle_keyboard_input(&mut self, ui: &mut egui::Ui, shortcut_handled: bool) {
         let events = ui.input(|i| i.events.clone());
-        let shift_held = ui.input(|i| i.modifiers.shift);
-        let super_held = ui.input(|i| {
-            i.key_down(egui::Key::SuperLeft)
-                || i.key_down(egui::Key::SuperRight)
-                || i.modifiers.mac_cmd
-        });
+        let current_mods = ui.input(|i| i.modifiers);
+        let super_held = ui.input(|i| is_super_down(i, None));
 
         for event in events {
             match event {
                 egui::Event::Text(text) => {
-                    if shortcut_handled || super_held {
+                    // ショートカットが発動した場合や、Super / Ctrl / Alt が押されている時の Text イベントは PTY に流さない
+                    if shortcut_handled || super_held || current_mods.ctrl || current_mods.alt {
                         continue;
                     }
                     if self.backend.scroll_offset() > 0 {
@@ -669,13 +668,14 @@ impl TerminalPane {
                     self.session.write_input(text.as_bytes());
                 }
                 egui::Event::Paste(text) => {
-                    if self.pending_paste || shift_held {
+                    if self.pending_paste {
                         self.pending_paste = false;
                         if self.backend.scroll_offset() > 0 {
                             self.backend.set_scroll_offset(0);
                         }
                         self.session.write_input(text.as_bytes());
                     } else if !shortcut_handled {
+                        // ショートカット外の通常の Ctrl+V は 0x16 (^V) を PTY に送る
                         self.session.write_input(&[0x16]);
                     }
                 }
@@ -684,39 +684,164 @@ impl TerminalPane {
         }
     }
 
+    /// 設定されたショートカット一覧と照合し、一致したものがあれば実行する。
+    /// 戻り値: (ショートカットとして消費されたか, 発行されたTitleBarAction)
+    fn try_match_configured_shortcuts(
+        &mut self,
+        ui: &mut egui::Ui,
+        shortcuts: &ShortcutSettings,
+        key: egui::Key,
+        physical_key: Option<egui::Key>,
+        modifiers: egui::Modifiers,
+        super_held: bool,
+        has_paste_event: bool,
+        paste_text: Option<&str>,
+    ) -> (bool, Option<TitleBarAction>) {
+        if shortcut_matches_event(&shortcuts.copy, key, physical_key, modifiers, super_held) {
+            self.copy_selection_or_screen(ui.ctx());
+            return (true, None);
+        }
+        if shortcut_matches_event(&shortcuts.paste, key, physical_key, modifiers, super_held) {
+            if let Some(text) = paste_text {
+                if self.backend.scroll_offset() > 0 {
+                    self.backend.set_scroll_offset(0);
+                }
+                self.session.write_input(text.as_bytes());
+                self.pending_paste = false;
+            } else if !has_paste_event {
+                self.pending_paste = true;
+                ui.ctx().send_viewport_cmd(egui::ViewportCommand::RequestPaste);
+            } else {
+                self.pending_paste = true;
+            }
+            return (true, None);
+        }
+        if shortcut_matches_event(&shortcuts.split_horizontal, key, physical_key, modifiers, super_held) {
+            return (true, Some(TitleBarAction::SplitHorizontal));
+        }
+        if shortcut_matches_event(&shortcuts.split_vertical, key, physical_key, modifiers, super_held) {
+            return (true, Some(TitleBarAction::SplitVertical));
+        }
+        if shortcut_matches_event(&shortcuts.new_tab, key, physical_key, modifiers, super_held) {
+            return (true, Some(TitleBarAction::NewTab));
+        }
+        if shortcut_matches_event(&shortcuts.close_pane, key, physical_key, modifiers, super_held) {
+            return (true, Some(TitleBarAction::ClosePane));
+        }
+        if shortcut_matches_event(&shortcuts.focus_next_pane, key, physical_key, modifiers, super_held) {
+            return (true, Some(TitleBarAction::FocusNextPane));
+        }
+        if shortcut_matches_event(&shortcuts.focus_prev_pane, key, physical_key, modifiers, super_held) {
+            return (true, Some(TitleBarAction::FocusPrevPane));
+        }
+        if shortcut_matches_event(&shortcuts.open_preferences, key, physical_key, modifiers, super_held) {
+            return (true, Some(TitleBarAction::OpenPreferences));
+        }
+        if shortcut_matches_event(&shortcuts.toggle_fullscreen, key, physical_key, modifiers, super_held) {
+            return (true, Some(TitleBarAction::ToggleMaximizeWindow));
+        }
+        if shortcut_matches_event(&shortcuts.zoom_in, key, physical_key, modifiers, super_held) {
+            return (true, Some(TitleBarAction::ZoomIn));
+        }
+        if shortcut_matches_event(&shortcuts.zoom_out, key, physical_key, modifiers, super_held) {
+            return (true, Some(TitleBarAction::ZoomOut));
+        }
+        if shortcut_matches_event(&shortcuts.zoom_reset, key, physical_key, modifiers, super_held) {
+            return (true, Some(TitleBarAction::ZoomReset));
+        }
+        (false, None)
+    }
+
     fn handle_shortcut_keyboard_input(
         &mut self,
         ui: &mut egui::Ui,
         shortcuts: &ShortcutSettings,
-    ) -> Option<TitleBarAction> {
+    ) -> (bool, Option<TitleBarAction>) {
         let mut action = None;
+        let mut any_shortcut_consumed = false;
+
         let events = ui.input(|i| i.events.clone());
-        let shift_held = ui.input(|i| i.modifiers.shift);
-        let super_held = ui.input(|i| {
-            i.key_down(egui::Key::SuperLeft)
-                || i.key_down(egui::Key::SuperRight)
-                || i.modifiers.mac_cmd
-        });
+        let current_mods = ui.input(|i| i.modifiers);
+        let super_held = ui.input(|i| is_super_down(i, None));
         let has_paste_event = events.iter().any(|e| matches!(e, egui::Event::Paste(_)));
 
-        for event in events {
+        for event in &events {
             match event {
+                // egui が Ctrl+C / Ctrl+Shift+C を Event::Copy に変換した場合
                 egui::Event::Copy => {
-                    if shift_held || self.normalized_selection().is_some() {
-                        self.copy_selection_or_screen(ui.ctx());
-                        if !shift_held {
-                            self.selection_start = None;
-                            self.selection_end = None;
+                    let mut mods = current_mods;
+                    mods.ctrl = true;
+                    let (matched, act) = self.try_match_configured_shortcuts(
+                        ui,
+                        shortcuts,
+                        egui::Key::C,
+                        Some(egui::Key::C),
+                        mods,
+                        super_held,
+                        has_paste_event,
+                        None,
+                    );
+                    if matched {
+                        any_shortcut_consumed = true;
+                        if act.is_some() {
+                            action = act;
                         }
-                    } else {
+                    } else if self.normalized_selection().is_some() {
+                        self.copy_selection_or_screen(ui.ctx());
+                        self.selection_start = None;
+                        self.selection_end = None;
+                        any_shortcut_consumed = true;
+                    } else if !mods.shift && !super_held {
+                        // 選択範囲がなく Ctrl+C が押された場合は SIGINT (^C)
                         self.session.write_input(&[0x03]);
                     }
                 }
+                // egui が Ctrl+X / Ctrl+Shift+X を Event::Cut に変換した場合
                 egui::Event::Cut => {
-                    if shift_held && self.normalized_selection().is_some() {
-                        self.copy_selection_or_screen(ui.ctx());
-                    } else if !shift_held {
+                    let mut mods = current_mods;
+                    mods.ctrl = true;
+                    let (matched, act) = self.try_match_configured_shortcuts(
+                        ui,
+                        shortcuts,
+                        egui::Key::X,
+                        Some(egui::Key::X),
+                        mods,
+                        super_held,
+                        has_paste_event,
+                        None,
+                    );
+                    if matched {
+                        any_shortcut_consumed = true;
+                        if act.is_some() {
+                            action = act;
+                        }
+                    } else if !mods.shift && !super_held {
                         self.session.write_input(&[0x18]);
+                    }
+                }
+                // egui が Ctrl+V / Ctrl+Shift+V を Event::Paste に変換した場合
+                egui::Event::Paste(text) => {
+                    if self.pending_paste {
+                        // RequestPaste による非同期ペースト応答の場合は handle_keyboard_input 側で処理する
+                        continue;
+                    }
+                    let mut mods = current_mods;
+                    mods.ctrl = true;
+                    let (matched, act) = self.try_match_configured_shortcuts(
+                        ui,
+                        shortcuts,
+                        egui::Key::V,
+                        Some(egui::Key::V),
+                        mods,
+                        super_held,
+                        true,
+                        Some(text.as_str()),
+                    );
+                    if matched {
+                        any_shortcut_consumed = true;
+                        if act.is_some() {
+                            action = act;
+                        }
                     }
                 }
                 egui::Event::Key {
@@ -726,161 +851,45 @@ impl TerminalPane {
                     modifiers,
                     ..
                 } => {
-                    if shortcut_matches_event(&shortcuts.copy, key, physical_key, modifiers, super_held) {
-                        self.copy_selection_or_screen(ui.ctx());
-                        continue;
-                    }
-                    if shortcut_matches_event(&shortcuts.paste, key, physical_key, modifiers, super_held) {
-                        if !has_paste_event {
-                            self.pending_paste = true;
-                            ui.ctx().send_viewport_cmd(egui::ViewportCommand::RequestPaste);
+                    let key = *key;
+                    let physical_key = *physical_key;
+                    let merged_mods = egui::Modifiers {
+                        alt: modifiers.alt || current_mods.alt,
+                        ctrl: modifiers.ctrl || current_mods.ctrl,
+                        shift: modifiers.shift || current_mods.shift,
+                        mac_cmd: modifiers.mac_cmd || current_mods.mac_cmd,
+                        command: modifiers.command || current_mods.command,
+                    };
+                    let ev_super = super_held || merged_mods.mac_cmd;
+
+                    // 1. まず設定画面のカスタムショートカットを最優先で判定
+                    let (matched, act) = self.try_match_configured_shortcuts(
+                        ui,
+                        shortcuts,
+                        key,
+                        physical_key,
+                        merged_mods,
+                        ev_super,
+                        has_paste_event,
+                        None,
+                    );
+                    if matched {
+                        any_shortcut_consumed = true;
+                        if act.is_some() {
+                            action = act;
                         }
-                        continue;
-                    }
-                    if shortcut_matches_event(&shortcuts.split_horizontal, key, physical_key, modifiers, super_held) {
-                        action = Some(TitleBarAction::SplitHorizontal);
-                        continue;
-                    }
-                    if shortcut_matches_event(&shortcuts.split_vertical, key, physical_key, modifiers, super_held) {
-                        action = Some(TitleBarAction::SplitVertical);
-                        continue;
-                    }
-                    if shortcut_matches_event(&shortcuts.new_tab, key, physical_key, modifiers, super_held) {
-                        action = Some(TitleBarAction::NewTab);
-                        continue;
-                    }
-                    if shortcut_matches_event(&shortcuts.close_pane, key, physical_key, modifiers, super_held) {
-                        action = Some(TitleBarAction::ClosePane);
-                        continue;
-                    }
-                    if shortcut_matches_event(&shortcuts.focus_next_pane, key, physical_key, modifiers, super_held) {
-                        action = Some(TitleBarAction::FocusNextPane);
-                        continue;
-                    }
-                    if shortcut_matches_event(&shortcuts.focus_prev_pane, key, physical_key, modifiers, super_held) {
-                        action = Some(TitleBarAction::FocusPrevPane);
-                        continue;
-                    }
-                    if shortcut_matches_event(&shortcuts.open_preferences, key, physical_key, modifiers, super_held) {
-                        action = Some(TitleBarAction::OpenPreferences);
-                        continue;
-                    }
-                    if shortcut_matches_event(&shortcuts.toggle_fullscreen, key, physical_key, modifiers, super_held) {
-                        action = Some(TitleBarAction::ToggleMaximizeWindow);
-                        continue;
-                    }
-                    if shortcut_matches_event(&shortcuts.zoom_in, key, physical_key, modifiers, super_held) {
-                        action = Some(TitleBarAction::ZoomIn);
-                        continue;
-                    }
-                    if shortcut_matches_event(&shortcuts.zoom_out, key, physical_key, modifiers, super_held) {
-                        action = Some(TitleBarAction::ZoomOut);
-                        continue;
-                    }
-                    if shortcut_matches_event(&shortcuts.zoom_reset, key, physical_key, modifiers, super_held) {
-                        action = Some(TitleBarAction::ZoomReset);
                         continue;
                     }
 
-                    if super_held || modifiers.mac_cmd {
-                        match key {
-                            egui::Key::Plus | egui::Key::Equals => {
-                                action = Some(TitleBarAction::ZoomIn);
-                                continue;
-                            }
-                            egui::Key::Minus => {
-                                action = Some(TitleBarAction::ZoomOut);
-                                continue;
-                            }
-                            egui::Key::Num0 => {
-                                action = Some(TitleBarAction::ZoomReset);
-                                continue;
-                            }
-                            _ => match physical_key {
-                                Some(egui::Key::Plus | egui::Key::Equals) => {
-                                    action = Some(TitleBarAction::ZoomIn);
-                                    continue;
-                                }
-                                Some(egui::Key::Minus) => {
-                                    action = Some(TitleBarAction::ZoomOut);
-                                    continue;
-                                }
-                                Some(egui::Key::Num0) => {
-                                    action = Some(TitleBarAction::ZoomReset);
-                                    continue;
-                                }
-                                _ => {}
-                            },
-                        }
+                    // Super キーが押されているがどのショートカットにもマッチしなかった場合は PTY へ誤送信しない
+                    if ev_super {
+                        continue;
                     }
 
-                    if modifiers.ctrl && modifiers.shift {
-                        match key {
-                            egui::Key::Tab => {
-                                action = Some(TitleBarAction::FocusPrevPane);
-                            }
-                            egui::Key::C => {
-                                self.copy_selection_or_screen(ui.ctx());
-                            }
-                            egui::Key::V => {
-                                if !has_paste_event {
-                                    self.pending_paste = true;
-                                    ui.ctx().send_viewport_cmd(egui::ViewportCommand::RequestPaste);
-                                }
-                            }
-                            egui::Key::E => {
-                                action = Some(TitleBarAction::SplitHorizontal);
-                            }
-                            egui::Key::O => {
-                                action = Some(TitleBarAction::SplitVertical);
-                            }
-                            egui::Key::T => {
-                                action = Some(TitleBarAction::NewTab);
-                            }
-                            egui::Key::W => {
-                                action = Some(TitleBarAction::ClosePane);
-                            }
-                            egui::Key::Plus | egui::Key::Equals => {
-                                action = Some(TitleBarAction::ZoomIn);
-                            }
-                            egui::Key::Minus => {
-                                action = Some(TitleBarAction::ZoomOut);
-                            }
-                            egui::Key::Num0 => {
-                                action = Some(TitleBarAction::ZoomReset);
-                            }
-                            _ => {}
-                        }
-                    } else if modifiers.alt && modifiers.shift {
-                        if key == egui::Key::D {
-                            action = Some(TitleBarAction::SplitVertical);
-                        }
-                    } else if modifiers.ctrl {
-                        match key {
-                            egui::Key::Tab => {
-                                action = Some(TitleBarAction::FocusNextPane);
-                                continue;
-                            }
-                            egui::Key::Comma => {
-                                action = Some(TitleBarAction::OpenPreferences);
-                                continue;
-                            }
-                            egui::Key::Plus | egui::Key::Equals => {
-                                action = Some(TitleBarAction::ZoomIn);
-                                continue;
-                            }
-                            egui::Key::Minus => {
-                                action = Some(TitleBarAction::ZoomOut);
-                                continue;
-                            }
-                            egui::Key::Num0 => {
-                                action = Some(TitleBarAction::ZoomReset);
-                                continue;
-                            }
-                            _ => {}
-                        }
-
-                        let key_name = format!("{:?}", key);
+                    // 2. ショートカットに該当しなかった通常のターミナルキー入力を PTY へ送信
+                    if merged_mods.ctrl && !merged_mods.shift && !merged_mods.alt {
+                        let effective_key = physical_key.unwrap_or(key);
+                        let key_name = format!("{:?}", effective_key);
                         if key_name.len() == 1 {
                             let ch = key_name.chars().next().unwrap();
                             if ch.is_ascii_uppercase() {
@@ -894,7 +903,7 @@ impl TerminalPane {
                                 }
                             }
                         } else {
-                            match key {
+                            match effective_key {
                                 egui::Key::Space => self.session.write_input(&[0x00]),
                                 egui::Key::Slash => self.session.write_input(&[0x1f]),
                                 egui::Key::OpenBracket => self.session.write_input(&[0x1b]),
@@ -903,17 +912,14 @@ impl TerminalPane {
                                 _ => {}
                             }
                         }
-                    } else if modifiers.alt {
-                        if key == egui::Key::D {
-                            action = Some(TitleBarAction::SplitHorizontal);
-                            continue;
-                        }
-                        let key_name = format!("{:?}", key);
+                    } else if merged_mods.alt && !merged_mods.ctrl && !merged_mods.shift {
+                        let effective_key = physical_key.unwrap_or(key);
+                        let key_name = format!("{:?}", effective_key);
                         if key_name.len() == 1 {
                             let ch = key_name.chars().next().unwrap().to_ascii_lowercase();
                             self.session.write_input(&[0x1b, ch as u8]);
                         }
-                    } else if modifiers.shift {
+                    } else if merged_mods.shift && !merged_mods.ctrl && !merged_mods.alt {
                         let (rows, _) = self.backend.size();
                         let page_step = (rows as isize / 2).max(1);
                         match key {
@@ -944,7 +950,7 @@ impl TerminalPane {
                             }
                             _ => {}
                         }
-                    } else {
+                    } else if merged_mods.is_none() {
                         if self.backend.scroll_offset() > 0 {
                             self.backend.set_scroll_offset(0);
                         }
@@ -973,9 +979,7 @@ impl TerminalPane {
                             egui::Key::F8 => self.session.write_input(b"\x1b[19~"),
                             egui::Key::F9 => self.session.write_input(b"\x1b[20~"),
                             egui::Key::F10 => self.session.write_input(b"\x1b[21~"),
-                            egui::Key::F11 => {
-                                action = Some(TitleBarAction::ToggleMaximizeWindow);
-                            }
+                            egui::Key::F11 => self.session.write_input(b"\x1b[23~"),
                             egui::Key::F12 => self.session.write_input(b"\x1b[24~"),
                             _ => {}
                         }
@@ -985,7 +989,7 @@ impl TerminalPane {
             }
         }
 
-        action
+        (any_shortcut_consumed, action)
     }
 }
 
