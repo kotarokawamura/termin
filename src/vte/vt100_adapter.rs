@@ -24,6 +24,7 @@ pub struct Vt100Adapter {
     rows: u16,
     cols: u16,
     max_scrollback: usize,
+    generation: u64,
 }
 
 impl Vt100Adapter {
@@ -33,7 +34,12 @@ impl Vt100Adapter {
             rows,
             cols,
             max_scrollback: 0,
+            generation: 0,
         }
+    }
+
+    pub fn generation(&self) -> u64 {
+        self.generation
     }
 
     fn refresh_max_scrollback(&mut self) {
@@ -46,7 +52,11 @@ impl Vt100Adapter {
     }
 
     pub fn process_bytes(&mut self, bytes: &[u8]) {
+        if bytes.is_empty() {
+            return;
+        }
         self.parser.process(bytes);
+        self.generation = self.generation.wrapping_add(1);
         let cursor_at_bottom = self.parser.screen().cursor_position().0 + 1 >= self.rows;
         if cursor_at_bottom || bytes.contains(&b'\n') || bytes.contains(&0x1b) {
             self.refresh_max_scrollback();
@@ -68,6 +78,7 @@ impl Vt100Adapter {
             self.cols = new_cols;
             self.parser.screen_mut().set_size(new_rows, new_cols);
             self.refresh_max_scrollback();
+            self.generation = self.generation.wrapping_add(1);
             return;
         }
 
@@ -105,6 +116,7 @@ impl Vt100Adapter {
                 .screen_mut()
                 .set_scrollback(prev_scrollback.min(self.max_scrollback));
         }
+        self.generation = self.generation.wrapping_add(1);
     }
 
     pub fn read_cell(&self, row: u16, col: u16) -> RenderableCell {
@@ -194,6 +206,7 @@ impl Vt100Adapter {
         new_parser.process(&buf);
         self.parser = new_parser;
         self.max_scrollback = 0;
+        self.generation = self.generation.wrapping_add(1);
     }
 }
 

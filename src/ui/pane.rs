@@ -41,6 +41,18 @@ pub struct PaneUiOutput {
 
 const SCROLLBAR_WIDTH: f32 = 10.0;
 
+#[derive(Clone, PartialEq)]
+struct CellCacheKey {
+    generation: u64,
+    scroll_offset: usize,
+    rect_min_x: i32,
+    rect_min_y: i32,
+    rows: u16,
+    cols: u16,
+    font_size_bits: u32,
+    selection: Option<((u16, u16), (u16, u16))>,
+}
+
 pub struct TerminalPane {
     pub id: usize,
     pub title: String,
@@ -54,8 +66,9 @@ pub struct TerminalPane {
     select_anchor_pos: Option<egui::Pos2>,
     pub pending_paste: bool,
     pub super_key_latched: bool,
+    cell_cache_key: Option<CellCacheKey>, // 追加
+    cached_cell_shapes: Vec<egui::Shape>, // 追加
 }
-
 impl TerminalPane {
 
     pub fn new_with_command(id: usize, title: &str, startup_command: Option<&str>) -> Self {
@@ -91,6 +104,8 @@ impl TerminalPane {
             select_anchor_pos: None,
             pending_paste: false,
             super_key_latched: false,
+            cell_cache_key: None,
+            cached_cell_shapes: Vec::new(),
         }
     }
 
@@ -267,7 +282,6 @@ impl TerminalPane {
         let font_id = egui::FontId::monospace(term_font_size);
         let term_font_size =
             (settings.effective_terminal_font_size() * self.zoom_scale).clamp(6.0, 64.0);
-        let font_id = egui::FontId::monospace(term_font_size);
         let char_w = (term_font_size * 0.6).max(4.0);
 
         let ink_max_y = ui.fonts_mut(|f| f.row_height(&font_id));
@@ -278,7 +292,6 @@ impl TerminalPane {
         let glyph_y_offset = (char_h - ink_max_y) * 0.5;
         let pad = 4.0_f32;
 
-        let inner_w = (rect.width() - pad * 2.0).max(0.0);
         let inner_w = (rect.width() - pad * 2.0).max(0.0);
         let inner_h = (rect.height() - pad * 2.0).max(0.0);
         let new_cols = ((inner_w / char_w).floor() as u16).max(10);
@@ -436,171 +449,196 @@ impl TerminalPane {
         // 設定されたパネル背景色と透明度で塗りつぶす（デフォルトは #000000 の真っ黒）
         painter.rect_filled(full_rect, 0.0, settings.terminal_bg_color_with_opacity());
 
-        // Draw cells in two passes (Batched by horizontal runs)
+        // Draw cells in two passes (with Shape caching for zero-cost mouse movement)
         let (rows, cols) = self.backend.size();
         let norm_selection = self.normalized_selection();
 
-        let is_default_bg = |cell: &crate::vte::RenderableCell, bg: crate::vte::RgbColor| -> bool {
-            !cell.inverse
-                && (bg == crate::vte::RgbColor(18, 18, 18) || bg == crate::vte::RgbColor(0, 0, 0))
+        let current_cache_key = CellCacheKey {
+            generation: self.backend.generation(),
+            scroll_offset: self.backend.scroll_offset(),
+            rect_min_x: (rect.min.x * 10.0).round() as i32,
+            rect_min_y: (rect.min.y * 10.0).round() as i32,
+            rows,
+            cols,
+            font_size_bits: term_font_size.to_bits(),
+            selection: norm_selection,
         };
 
-        // Pass 1: 非デフォルト背景色と選択範囲の矩形を横方向に結合して描画
-        for r in 0..rows {
-            let row_y = rect.min.y + pad + (r as f32) * char_h;
-            let mut c = 0;
-            while c < cols {
-                let cell = self.backend.read_cell(r, c);
-                let bg = if cell.inverse { cell.fg } else { cell.bg };
-
-                if !is_default_bg(&cell, bg) {
-                    let start_c = c;
-                    c += 1;
-                    while c < cols {
-                        let next_cell = self.backend.read_cell(r, c);
-                        let next_bg = if next_cell.inverse { next_cell.fg } else { next_cell.bg };
-                        if is_default_bg(&next_cell, next_bg) || next_bg != bg {
-                            break;
-                        }
-                        c += 1;
-                    }
-                    let run_rect = egui::Rect::from_min_size(
-                        egui::pos2(rect.min.x + pad + (start_c as f32) * char_w, row_y),
-                        egui::vec2(((c - start_c) as f32) * char_w, char_h),
-                    );
-                    painter.rect_filled(
-                        run_rect,
-                        0.0,
-                        egui::Color32::from_rgb(bg.0, bg.1, bg.2),
-                    );
-                } else {
-                    c += 1;
-                }
-            }
-
-            if let Some((start, end)) = norm_selection {
-                if r >= start.0 && r <= end.0 {
-                    let sel_c_start = if r == start.0 { start.1 } else { 0 };
-                    let sel_c_end = if r == end.0 {
-                        end.1.min(cols.saturating_sub(1))
-                    } else {
-                        cols.saturating_sub(1)
-                    };
-                    if sel_c_start <= sel_c_end {
-                        let sel_rect = egui::Rect::from_min_size(
-                            egui::pos2(rect.min.x + pad + (sel_c_start as f32) * char_w, row_y),
-                            egui::vec2(((sel_c_end - sel_c_start + 1) as f32) * char_w, char_h),
-                        );
-                        painter.rect_filled(
-                            sel_rect,
-                            0.0,
-                            egui::Color32::from_rgba_unmultiplied(70, 130, 210, 110),
-                        );
-                    }
-                }
-            }
-        }
-
-        // Pass 2: テキストと下線をバッチ描画
-        let mut run_text = String::with_capacity(cols as usize);
-        for r in 0..rows {
-            let row_y = rect.min.y + pad + (r as f32) * char_h;
-            let mut c = 0;
-
-            while c < cols {
-                let cell = self.backend.read_cell(r, c);
-                if cell.wide_continuation
-                    || ((cell.ch == ' ' || cell.ch == '\0') && !cell.underline)
-                {
-                    c += 1;
-                    continue;
-                }
-
-                let resolve_fg = |cell: &crate::vte::RenderableCell| -> egui::Color32 {
-                    let mut fg = if cell.inverse { cell.bg } else { cell.fg };
-                    if cell.bold {
-                        fg = crate::vte::RgbColor(
-                            fg.0.saturating_add(25),
-                            fg.1.saturating_add(25),
-                            fg.2.saturating_add(25),
-                        );
-                    }
-                    egui::Color32::from_rgb(fg.0, fg.1, fg.2)
+        if self.cell_cache_key.as_ref() != Some(&current_cache_key) {
+            let mut shapes = Vec::with_capacity((rows as usize) * 4);
+            let is_default_bg =
+                |cell: &crate::vte::RenderableCell, bg: crate::vte::RgbColor| -> bool {
+                    !cell.inverse
+                        && (bg == crate::vte::RgbColor(18, 18, 18)
+                        || bg == crate::vte::RgbColor(0, 0, 0))
                 };
 
-                let fg_color = resolve_fg(&cell);
+            // Pass 1: 非デフォルト背景色と選択範囲の矩形を横方向に結合して生成
+            for r in 0..rows {
+                let row_y = rect.min.y + pad + (r as f32) * char_h;
+                let mut c = 0;
+                while c < cols {
+                    let cell = self.backend.read_cell(r, c);
+                    let bg = if cell.inverse { cell.fg } else { cell.bg };
 
-                // 全角文字（wide）は2セル幅を維持するため単独描画
-                if cell.wide {
-                    let cell_x = rect.min.x + pad + (c as f32) * char_w;
-                    if cell.ch != ' ' && cell.ch != '\0' {
-                        painter.text(
-                            egui::pos2(cell_x, row_y + glyph_y_offset),
-                            egui::Align2::LEFT_TOP,
-                            cell.ch,
-                            font_id.clone(),
-                            fg_color,
+                    if !is_default_bg(&cell, bg) {
+                        let start_c = c;
+                        c += 1;
+                        while c < cols {
+                            let next_cell = self.backend.read_cell(r, c);
+                            let next_bg = if next_cell.inverse {
+                                next_cell.fg
+                            } else {
+                                next_cell.bg
+                            };
+                            if is_default_bg(&next_cell, next_bg) || next_bg != bg {
+                                break;
+                            }
+                            c += 1;
+                        }
+                        let run_rect = egui::Rect::from_min_size(
+                            egui::pos2(rect.min.x + pad + (start_c as f32) * char_w, row_y),
+                            egui::vec2(((c - start_c) as f32) * char_w, char_h),
                         );
+                        shapes.push(egui::Shape::rect_filled(
+                            run_rect,
+                            0.0,
+                            egui::Color32::from_rgb(bg.0, bg.1, bg.2),
+                        ));
+                    } else {
+                        c += 1;
                     }
-                    if cell.underline {
-                        let y = (row_y + glyph_y_offset + ink_max_y).min(row_y + char_h - 1.0);
-                        painter.line_segment(
-                            [egui::pos2(cell_x, y), egui::pos2(cell_x + char_w * 2.0, y)],
-                            egui::Stroke::new(1.0, fg_color),
-                        );
-                    }
-                    c += 1;
-                    continue;
                 }
 
-                // 半角文字：同一色・同一下線属性が続く限り1つの String に結合して1回で描画
-                let start_c = c;
-                let has_underline = cell.underline;
-                run_text.clear();
-                run_text.push(if cell.ch == '\0' { ' ' } else { cell.ch });
-                c += 1;
-
-                while c < cols {
-                    let next = self.backend.read_cell(r, c);
-                    if next.wide || next.wide_continuation || next.underline != has_underline {
-                        break;
-                    }
-                    if (next.ch == ' ' || next.ch == '\0') && !has_underline {
-                        let peek_empty = (c + 1 >= cols) || {
-                            let peek = self.backend.read_cell(r, c + 1);
-                            peek.ch == ' ' || peek.ch == '\0'
+                if let Some((start, end)) = norm_selection {
+                    if r >= start.0 && r <= end.0 {
+                        let sel_c_start = if r == start.0 { start.1 } else { 0 };
+                        let sel_c_end = if r == end.0 {
+                            end.1.min(cols.saturating_sub(1))
+                        } else {
+                            cols.saturating_sub(1)
                         };
-                        if peek_empty {
-                            break;
+                        if sel_c_start <= sel_c_end {
+                            let sel_rect = egui::Rect::from_min_size(
+                                egui::pos2(rect.min.x + pad + (sel_c_start as f32) * char_w, row_y),
+                                egui::vec2(((sel_c_end - sel_c_start + 1) as f32) * char_w, char_h),
+                            );
+                            shapes.push(egui::Shape::rect_filled(
+                                sel_rect,
+                                0.0,
+                                egui::Color32::from_rgba_unmultiplied(70, 130, 210, 110),
+                            ));
                         }
                     }
-                    if resolve_fg(&next) != fg_color {
-                        break;
-                    }
-                    run_text.push(if next.ch == '\0' { ' ' } else { next.ch });
-                    c += 1;
-                }
-
-                let start_x = rect.min.x + pad + (start_c as f32) * char_w;
-                painter.text(
-                    egui::pos2(start_x, row_y + glyph_y_offset),
-                    egui::Align2::LEFT_TOP,
-                    &run_text,
-                    font_id.clone(),
-                    fg_color,
-                );
-
-                if has_underline {
-                    let y = (row_y + glyph_y_offset + ink_max_y).min(row_y + char_h - 1.0);
-                    let width_px = ((c - start_c) as f32) * char_w;
-                    painter.line_segment(
-                        [egui::pos2(start_x, y), egui::pos2(start_x + width_px, y)],
-                        egui::Stroke::new(1.0, fg_color),
-                    );
                 }
             }
+
+            // Pass 2: テキストと下線をバッチ生成
+            let mut run_text = String::with_capacity(cols as usize);
+            for r in 0..rows {
+                let row_y = rect.min.y + pad + (r as f32) * char_h;
+                let mut c = 0;
+
+                while c < cols {
+                    let cell = self.backend.read_cell(r, c);
+                    if cell.wide_continuation
+                        || ((cell.ch == ' ' || cell.ch == '\0') && !cell.underline)
+                    {
+                        c += 1;
+                        continue;
+                    }
+
+                    let resolve_fg = |cell: &crate::vte::RenderableCell| -> egui::Color32 {
+                        let mut fg = if cell.inverse { cell.bg } else { cell.fg };
+                        if cell.bold {
+                            fg = crate::vte::RgbColor(
+                                fg.0.saturating_add(25),
+                                fg.1.saturating_add(25),
+                                fg.2.saturating_add(25),
+                            );
+                        }
+                        egui::Color32::from_rgb(fg.0, fg.1, fg.2)
+                    };
+
+                    let fg_color = resolve_fg(&cell);
+
+                    if cell.wide {
+                        let cell_x = rect.min.x + pad + (c as f32) * char_w;
+                        if cell.ch != ' ' && cell.ch != '\0' {
+                            let galley = ui.fonts_mut(|f| {
+                                f.layout_no_wrap(cell.ch.to_string(), font_id.clone(), fg_color)
+                            });
+                            shapes.push(egui::Shape::galley(
+                                egui::pos2(cell_x, row_y + glyph_y_offset),
+                                galley,
+                                fg_color,
+                            ));
+                        }
+                        if cell.underline {
+                            let y = (row_y + glyph_y_offset + ink_max_y).min(row_y + char_h - 1.0);
+                            shapes.push(egui::Shape::line_segment(
+                                [egui::pos2(cell_x, y), egui::pos2(cell_x + char_w * 2.0, y)],
+                                egui::Stroke::new(1.0, fg_color),
+                            ));
+                        }
+                        c += 1;
+                        continue;
+                    }
+
+                    let start_c = c;
+                    let has_underline = cell.underline;
+                    run_text.clear();
+                    run_text.push(if cell.ch == '\0' { ' ' } else { cell.ch });
+                    c += 1;
+
+                    while c < cols {
+                        let next = self.backend.read_cell(r, c);
+                        if next.wide || next.wide_continuation || next.underline != has_underline {
+                            break;
+                        }
+                        if (next.ch == ' ' || next.ch == '\0') && !has_underline {
+                            let peek_empty = (c + 1 >= cols) || {
+                                let peek = self.backend.read_cell(r, c + 1);
+                                peek.ch == ' ' || peek.ch == '\0'
+                            };
+                            if peek_empty {
+                                break;
+                            }
+                        }
+                        if resolve_fg(&next) != fg_color {
+                            break;
+                        }
+                        run_text.push(if next.ch == '\0' { ' ' } else { next.ch });
+                        c += 1;
+                    }
+
+                    let start_x = rect.min.x + pad + (start_c as f32) * char_w;
+                    let galley = ui.fonts_mut(|f| {
+                        f.layout_no_wrap(run_text.clone(), font_id.clone(), fg_color)
+                    });
+                    shapes.push(egui::Shape::galley(
+                        egui::pos2(start_x, row_y + glyph_y_offset),
+                        galley,
+                        fg_color,
+                    ));
+
+                    if has_underline {
+                        let y = (row_y + glyph_y_offset + ink_max_y).min(row_y + char_h - 1.0);
+                        let width_px = ((c - start_c) as f32) * char_w;
+                        shapes.push(egui::Shape::line_segment(
+                            [egui::pos2(start_x, y), egui::pos2(start_x + width_px, y)],
+                            egui::Stroke::new(1.0, fg_color),
+                        ));
+                    }
+                }
+            }
+
+            self.cached_cell_shapes = shapes;
+            self.cell_cache_key = Some(current_cache_key);
         }
 
+        // キャッシュされた Shape 群を一括描画（Galley は内部が Arc なので clone コストは極小）
+        painter.extend(self.cached_cell_shapes.iter().cloned());
         // Draw cursor
         let cursor = self.backend.cursor();
         let cursor_visually_active = visually_active && !pane_context_menu_open;
