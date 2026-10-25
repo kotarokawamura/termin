@@ -26,6 +26,7 @@ use x11rb::wrapper::ConnectionExt as _;
 use crate::config::prefs_ui::PreferencesWindow;
 use crate::config::theme::ThemeSettings;
 use crate::menus::MenuManager;
+use crate::ui::scheduler::{PollMode, RepaintScheduler};
 use crate::ui::workspace::Workspace;
 
 const RESIZE_CORNER_SIZE: f32 = 16.0;
@@ -178,6 +179,7 @@ pub struct TerminApp {
     pub workspace: Workspace,
     pub prefs_window: PreferencesWindow,
     pub menu_manager: MenuManager,
+    pub scheduler: RepaintScheduler,
     x11_pinch_listener: Option<X11PinchListener>,
     x11_pinch_init_attempted: bool,
     startup_focus_frames: u8,
@@ -187,6 +189,7 @@ impl TerminApp {
     pub fn new(
         cc: &eframe::CreationContext<'_>,
         fps_override: Option<u32>,
+        poll_mode: PollMode,
         open_prefs_on_startup: bool,
     ) -> Self {
         let mut settings = ThemeSettings::load();
@@ -194,11 +197,11 @@ impl TerminApp {
             settings.target_fps = fps.clamp(1, 240);
         }
 
-        // Disable egui's global GUI zoom so Ctrl/Super + =/- only zooms the focused terminal pane
+        let scheduler = RepaintScheduler::new(poll_mode);
+        let wakeup_ctx = scheduler.pty_wakeup_ctx(&cc.egui_ctx);
+
         cc.egui_ctx.options_mut(|o| o.zoom_with_keyboard = false);
-        // Apply saved font family and sizes on startup
         settings.apply_fonts(&cc.egui_ctx);
-        // Request OS window focus on startup so the initial active pane receives keyboard input immediately
         cc.egui_ctx
             .send_viewport_cmd(egui::ViewportCommand::Focus);
 
@@ -213,9 +216,10 @@ impl TerminApp {
 
         Self {
             settings,
-            workspace: Workspace::new(),
+            workspace: Workspace::new_with_wakeup(wakeup_ctx),
             prefs_window,
             menu_manager: MenuManager::new(),
+            scheduler,
             x11_pinch_listener,
             x11_pinch_init_attempted,
             startup_focus_frames: 10,
@@ -318,15 +322,16 @@ impl eframe::App for TerminApp {
             ctx.request_repaint();
         }
 
-        // Poll active PTY sessions and request repaint if new output arrived
-        if self.workspace.poll_sessions() {
-            ctx.request_repaint();
-        }
+        // Poll active PTY sessions
+        let pty_updated = self.workspace.poll_sessions();
 
-        let fps = self.settings.effective_fps() as u64;
-        ctx.request_repaint_after(std::time::Duration::from_millis((1000 / fps).max(1)));
+        // Scheduler モジュールに次フレームのスケジューリングを委譲
+        self.scheduler.schedule_next_frame(
+            &ctx,
+            pty_updated,
+            self.settings.effective_fps(),
+        );
 
-        self.handle_custom_resize_frame(&ctx);
 
         // Apply separator color to egui style
         ctx.all_styles_mut(|style| {

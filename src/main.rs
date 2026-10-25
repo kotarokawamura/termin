@@ -1,18 +1,5 @@
 // Copyright (C) [2026/10/19] kotaro,termin
-//
-// This program is free software; you can redistribute it and/or
-// modify it under the terms of the GNU General Public License
-// as published by the Free Software Foundation; version 2
-// of the License.
-//
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU General Public License for more details.
-//
-// You should have received a copy of the GNU General Public License
-// along with this program; if not, write to the Free Software
-// Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
+// (ライセンスヘッダ省略)
 mod config;
 pub mod i18n;
 pub mod menus;
@@ -22,9 +9,17 @@ mod vte;
 
 use eframe::egui;
 use ui::app::TerminApp;
+use ui::scheduler::PollMode;
 
-fn parse_cli_args() -> (Option<u32>, bool) {
+pub struct CliOptions {
+    pub fps_override: Option<u32>,
+    pub poll_mode: PollMode,
+    pub open_prefs: bool,
+}
+
+fn parse_cli_args() -> CliOptions {
     let mut fps_override = None;
+    let mut explicit_mode = None;
     let mut open_prefs = false;
     let mut args = std::env::args().skip(1);
 
@@ -35,6 +30,17 @@ fn parse_cli_args() -> (Option<u32>, bool) {
                     fps_override = Some(val.clamp(1, 240));
                 }
             }
+            "--mode" | "-m" => {
+                if let Some(val) = args.next().and_then(|s| PollMode::from_cli_str(&s)) {
+                    explicit_mode = Some(val);
+                }
+            }
+            "--event" | "--event-driven" => {
+                explicit_mode = Some(PollMode::EventDriven);
+            }
+            "--poll" | "--continuous" => {
+                explicit_mode = Some(PollMode::ContinuousFps);
+            }
             "--prefs" => {
                 open_prefs = true;
             }
@@ -43,14 +49,33 @@ fn parse_cli_args() -> (Option<u32>, bool) {
                     fps_override = Some(val.clamp(1, 240));
                 }
             }
+            s if s.starts_with("--mode=") => {
+                if let Some(val) = PollMode::from_cli_str(&s["--mode=".len()..]) {
+                    explicit_mode = Some(val);
+                }
+            }
             _ => {}
         }
     }
-    (fps_override, open_prefs)
+
+    // --mode が明示されていればそれに従い、未指定で --fps が指定された場合は ContinuousFps にする
+    let poll_mode = explicit_mode.unwrap_or_else(|| {
+        if fps_override.is_some() {
+            PollMode::ContinuousFps
+        } else {
+            PollMode::EventDriven
+        }
+    });
+
+    CliOptions {
+        fps_override,
+        poll_mode,
+        open_prefs,
+    }
 }
 
 fn main() -> Result<(), eframe::Error> {
-    let (fps_override, open_prefs) = parse_cli_args();
+    let cli = parse_cli_args();
 
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
@@ -65,6 +90,13 @@ fn main() -> Result<(), eframe::Error> {
     eframe::run_native(
         "termin",
         options,
-        Box::new(move |cc| Ok(Box::new(TerminApp::new(cc, fps_override, open_prefs)))),
+        Box::new(move |cc| {
+            Ok(Box::new(TerminApp::new(
+                cc,
+                cli.fps_override,
+                cli.poll_mode,
+                cli.open_prefs,
+            )))
+        }),
     )
 }

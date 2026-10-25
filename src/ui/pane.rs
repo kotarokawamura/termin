@@ -53,15 +53,26 @@ pub struct TerminalPane {
 }
 
 impl TerminalPane {
-    pub fn new(id: usize, title: &str) -> Self {
-        Self::new_with_command(id, title, None)
-    }
 
     pub fn new_with_command(id: usize, title: &str, startup_command: Option<&str>) -> Self {
+        Self::new_with_wakeup(id, title, startup_command, None)
+    }
+
+    pub fn new_with_wakeup(
+        id: usize,
+        title: &str,
+        startup_command: Option<&str>,
+        wakeup_ctx: Option<egui::Context>,
+    ) -> Self {
         let rows = 24;
         let cols = 80;
         let backend = Vt100Adapter::new(rows, cols);
-        let session = Box::new(LocalPtySession::new_with_command(rows, cols, startup_command));
+        let session = Box::new(LocalPtySession::new_with_command(
+            rows,
+            cols,
+            startup_command,
+            wakeup_ctx,
+        ));
 
         Self {
             id,

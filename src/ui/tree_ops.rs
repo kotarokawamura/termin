@@ -138,7 +138,12 @@ impl Workspace {
 
         let id_num = self.next_pane_number;
         self.next_pane_number += 1;
-        let new_pane = TerminalPane::new(id_num, &default_shell_title());
+        let new_pane = TerminalPane::new_with_wakeup(
+            id_num,
+            &default_shell_title(),
+            None,
+            self.pty_wakeup_ctx.clone(),
+        );
         let new_pane_id = self.tree.tiles.insert_pane(new_pane);
 
         let container_tile = match axis {
@@ -159,7 +164,12 @@ impl Workspace {
     pub fn add_tab(&mut self, target_id: TileId) {
         let id_num = self.next_pane_number;
         self.next_pane_number += 1;
-        let new_pane = TerminalPane::new(id_num, &default_shell_title());
+        let new_pane = TerminalPane::new_with_wakeup(
+            id_num,
+            &default_shell_title(),
+            None,
+            self.pty_wakeup_ctx.clone(),
+        );
         let new_pane_id = self.tree.tiles.insert_pane(new_pane);
 
         for (_, tile) in self.tree.tiles.iter_mut() {
@@ -184,6 +194,7 @@ impl Workspace {
             .insert(target_id, Tile::Container(Container::Tabs(tabs)));
         self.focused_tile = Some(new_pane_id);
     }
+
 
     pub fn focus_adjacent_pane(&mut self, offset: isize) {
         let ordered_panes = self.ordered_pane_ids();
@@ -212,7 +223,8 @@ impl Workspace {
     pub fn load_layout(&mut self) {
         if let Some(layout) = LayoutNode::load_default() {
             let mut next_num = 1;
-            let (new_tree, first_pane) = layout.build_tree(&mut next_num);
+            // wakeup_ctx を追加
+            let (new_tree, first_pane) = layout.build_tree(&mut next_num, self.pty_wakeup_ctx.clone());
             self.tree = new_tree;
             self.next_pane_number = next_num;
             self.focused_tile = first_pane;

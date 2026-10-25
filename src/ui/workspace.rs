@@ -35,12 +35,22 @@ pub struct Workspace {
     pub next_pane_number: usize,
     pub(crate) recorded_rects: HashMap<TileId, egui::Rect>,
     pub moving_tile: Option<TileId>,
+    pub pty_wakeup_ctx: Option<egui::Context>,
 }
 
 impl Workspace {
     pub fn new() -> Self {
+        Self::new_with_wakeup(None)
+    }
+
+    pub fn new_with_wakeup(pty_wakeup_ctx: Option<egui::Context>) -> Self {
         let mut tiles = Tiles::default();
-        let first_pane = TerminalPane::new(1, &default_shell_title());
+        let first_pane = TerminalPane::new_with_wakeup(
+            1,
+            &default_shell_title(),
+            None,
+            pty_wakeup_ctx.clone(),
+        );
         let first_id = tiles.insert_pane(first_pane);
         let root = tiles.insert_horizontal_tile(vec![first_id]);
         let tree = Tree::new("termin_workspace", root, tiles);
@@ -52,6 +62,7 @@ impl Workspace {
             next_pane_number: 2,
             recorded_rects: HashMap::new(),
             moving_tile: None,
+            pty_wakeup_ctx,
         }
     }
 

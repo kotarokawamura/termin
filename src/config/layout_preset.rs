@@ -120,10 +120,20 @@ impl LayoutNode {
     }
 
     /// Reconstruct an `egui_tiles::Tree<TerminalPane>` from this `LayoutNode`.
-    pub fn build_tree(&self, next_pane_number: &mut usize) -> (Tree<TerminalPane>, Option<TileId>) {
+    /// Reconstruct an `egui_tiles::Tree<TerminalPane>` from this `LayoutNode`.
+    pub fn build_tree(
+        &self,
+        next_pane_number: &mut usize,
+        wakeup_ctx: Option<eframe::egui::Context>,
+    ) -> (Tree<TerminalPane>, Option<TileId>) {
         let mut tiles = Tiles::default();
         let mut first_pane_id = None;
-        let root_id = self.insert_into_tiles(&mut tiles, next_pane_number, &mut first_pane_id);
+        let root_id = self.insert_into_tiles(
+            &mut tiles,
+            next_pane_number,
+            &mut first_pane_id,
+            wakeup_ctx,
+        );
         let tree = Tree::new("termin_workspace", root_id, tiles);
         (tree, first_pane_id)
     }
@@ -133,12 +143,13 @@ impl LayoutNode {
         tiles: &mut Tiles<TerminalPane>,
         next_pane_number: &mut usize,
         first_pane_id: &mut Option<TileId>,
+        wakeup_ctx: Option<egui::Context>,
     ) -> TileId {
         match self {
             Self::Pane { title, command } => {
                 let id = *next_pane_number;
                 *next_pane_number += 1;
-                let pane = TerminalPane::new_with_command(id, title, command.as_deref());
+                let pane = TerminalPane::new_with_wakeup(id, title, command.as_deref(), wakeup_ctx);
                 let tile_id = tiles.insert_pane(pane);
                 if first_pane_id.is_none() {
                     *first_pane_id = Some(tile_id);
@@ -148,12 +159,12 @@ impl LayoutNode {
             Self::HorizontalSplit { children } => {
                 let child_ids: Vec<TileId> = children
                     .iter()
-                    .map(|c| c.insert_into_tiles(tiles, next_pane_number, first_pane_id))
+                    .map(|c| c.insert_into_tiles(tiles, next_pane_number, first_pane_id, wakeup_ctx.clone()))
                     .collect();
                 if child_ids.is_empty() {
                     let id = *next_pane_number;
                     *next_pane_number += 1;
-                    let tile_id = tiles.insert_pane(TerminalPane::new(id, &crate::ui::pane::default_shell_title()));
+                    let tile_id = tiles.insert_pane(TerminalPane::new_with_wakeup(id, &crate::ui::pane::default_shell_title(), None, wakeup_ctx));
                     if first_pane_id.is_none() {
                         *first_pane_id = Some(tile_id);
                     }
@@ -165,12 +176,12 @@ impl LayoutNode {
             Self::VerticalSplit { children } => {
                 let child_ids: Vec<TileId> = children
                     .iter()
-                    .map(|c| c.insert_into_tiles(tiles, next_pane_number, first_pane_id))
+                    .map(|c| c.insert_into_tiles(tiles, next_pane_number, first_pane_id, wakeup_ctx.clone()))
                     .collect();
                 if child_ids.is_empty() {
                     let id = *next_pane_number;
                     *next_pane_number += 1;
-                    let tile_id = tiles.insert_pane(TerminalPane::new(id, &crate::ui::pane::default_shell_title()));
+                    let tile_id = tiles.insert_pane(TerminalPane::new_with_wakeup(id, &crate::ui::pane::default_shell_title(), None, wakeup_ctx));
                     if first_pane_id.is_none() {
                         *first_pane_id = Some(tile_id);
                     }
@@ -182,12 +193,12 @@ impl LayoutNode {
             Self::Tabs { children } => {
                 let child_ids: Vec<TileId> = children
                     .iter()
-                    .map(|c| c.insert_into_tiles(tiles, next_pane_number, first_pane_id))
+                    .map(|c| c.insert_into_tiles(tiles, next_pane_number, first_pane_id, wakeup_ctx.clone()))
                     .collect();
                 if child_ids.is_empty() {
                     let id = *next_pane_number;
                     *next_pane_number += 1;
-                    let tile_id = tiles.insert_pane(TerminalPane::new(id, &crate::ui::pane::default_shell_title()));
+                    let tile_id = tiles.insert_pane(TerminalPane::new_with_wakeup(id, &crate::ui::pane::default_shell_title(), None, wakeup_ctx));
                     if first_pane_id.is_none() {
                         *first_pane_id = Some(tile_id);
                     }
@@ -198,4 +209,6 @@ impl LayoutNode {
             }
         }
     }
+
+
 }

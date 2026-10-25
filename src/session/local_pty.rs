@@ -16,6 +16,7 @@
 use std::io::{Read, Write};
 use std::sync::mpsc::{self, Receiver};
 use std::thread;
+use eframe::egui;
 use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize};
 use crate::session::SessionDriver;
 
@@ -29,10 +30,15 @@ pub struct LocalPtySession {
 impl LocalPtySession {
     #[allow(dead_code)]
     pub fn new(rows: u16, cols: u16) -> Self {
-        Self::new_with_command(rows, cols, None)
+        Self::new_with_command(rows, cols, None, None)
     }
 
-    pub fn new_with_command(rows: u16, cols: u16, startup_command: Option<&str>) -> Self {
+    pub fn new_with_command(
+        rows: u16,
+        cols: u16,
+        startup_command: Option<&str>,
+        wakeup_ctx: Option<egui::Context>,
+    ) -> Self {
         let (tx, rx) = mpsc::channel();
         let pty_system = native_pty_system();
 
@@ -61,7 +67,7 @@ impl LocalPtySession {
 
             if let Ok(mut reader) = pair.master.try_clone_reader() {
                 thread::spawn(move || {
-                    let mut buf = [0u8; 4096];
+                    let mut buf = [0u8; 8192];
                     while let Ok(n) = reader.read(&mut buf) {
                         if n == 0 {
                             break;
@@ -69,6 +75,14 @@ impl LocalPtySession {
                         if tx.send(buf[..n].to_vec()).is_err() {
                             break;
                         }
+                        // イベント駆動モード時：PTY出力が来たら即座にUIスレッドを起こす
+                        if let Some(ctx) = &wakeup_ctx {
+                            ctx.request_repaint();
+                        }
+                    }
+                    // シェル終了（Ctrl+D等）時にもパネルクローズ処理のためUIスレッドを起こす
+                    if let Some(ctx) = &wakeup_ctx {
+                        ctx.request_repaint();
                     }
                 });
             }
@@ -92,7 +106,6 @@ impl LocalPtySession {
 
 impl Drop for LocalPtySession {
     fn drop(&mut self) {
-        // Ensure child process is terminated and reaped when pane is closed
         self.writer.take();
         self.master.take();
         if let Some(child) = &mut self.child {
@@ -106,11 +119,13 @@ impl Drop for LocalPtySession {
 
 impl SessionDriver for LocalPtySession {
     fn read_output(&mut self) -> Vec<u8> {
-        let mut combined = Vec::new();
+        let Ok(mut first) = self.rx.try_recv() else {
+            return Vec::new();
+        };
         while let Ok(chunk) = self.rx.try_recv() {
-            combined.extend_from_slice(&chunk);
+            first.extend_from_slice(&chunk);
         }
-        combined
+        first
     }
 
     fn write_input(&mut self, data: &[u8]) {
