@@ -304,7 +304,10 @@ impl eframe::App for TerminApp {
             }
         }
 
-        let window_focused = ctx.input(|i| i.focused);
+        let (window_focused, is_minimized) = ctx.input(|i| {
+            (i.focused, i.viewport().minimized.unwrap_or(false))
+        });
+
         if self.startup_focus_frames > 0 {
             if window_focused {
                 self.startup_focus_frames = 0;
@@ -315,24 +318,31 @@ impl eframe::App for TerminApp {
             }
         }
 
-        self.current_zoom_delta = self
-            .x11_pinch_listener
-            .as_mut()
-            .map(|l| {
-                l.ensure_startup_focus(window_focused);
-                l.poll_zoom_delta()
-            })
-            .unwrap_or(1.0);
+        // 非フォーカス時は X11 ソケットのポーリング（システムコール）を行わない
+        self.current_zoom_delta = if window_focused || self.startup_focus_frames > 0 {
+            self.x11_pinch_listener
+                .as_mut()
+                .map(|l| {
+                    l.ensure_startup_focus(window_focused);
+                    l.poll_zoom_delta()
+                })
+                .unwrap_or(1.0)
+        } else {
+            1.0
+        };
+
         if (self.current_zoom_delta - 1.0).abs() > 0.001 {
             ctx.request_repaint();
         }
 
         let pty_updated = self.workspace.poll_sessions();
-        self.scheduler.schedule_next_frame(
-            ctx,
-            pty_updated,
-            self.settings.effective_fps(),
-        );
+        if !is_minimized {
+            self.scheduler.schedule_next_frame(
+                ctx,
+                pty_updated,
+                self.settings.effective_fps(),
+            );
+        }
     }
 
     fn ui(&mut self, ui: &mut Ui, _frame: &mut Frame) {
