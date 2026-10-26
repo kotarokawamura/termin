@@ -54,7 +54,7 @@ impl Workspace {
         );
         let first_id = tiles.insert_pane(first_pane);
         let root = tiles.insert_horizontal_tile(vec![first_id]);
-        let tree = Tree::new("termin_workspace", root, tiles);
+        let tree = Tree::new(egui::Id::new("termin_workspace"), root, tiles);
 
         Self {
             tree,
@@ -383,13 +383,13 @@ impl<'a> egui_tiles::Behavior<TerminalPane> for TreeBehavior<'a> {
         self.mode == InteractionMode::Normal && !self.popup_open && self.window_focused
     }
 
-    fn gap_width(&self, _style: &egui::Style) -> f32 {
+    fn gap_width(&self, _style: &egui::style::Style) -> f32 {
         self.settings.effective_separator_width()
     }
 
     fn resize_stroke(
         &self,
-        _style: &egui::Style,
+        _style: &egui::style::Style,
         resize_state: egui_tiles::ResizeState,
     ) -> egui::Stroke {
         let width = self.settings.effective_separator_width();
@@ -410,7 +410,7 @@ impl<'a> egui_tiles::Behavior<TerminalPane> for TreeBehavior<'a> {
         egui::Stroke::new(width, color)
     }
 
-    fn tab_bar_hline_stroke(&self, _visuals: &egui::Visuals) -> egui::Stroke {
+    fn tab_bar_hline_stroke(&self, _visuals: &egui::style::Visuals) -> egui::Stroke {
         egui::Stroke::new(1.0, self.settings.separator_color())
     }
 

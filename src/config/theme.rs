@@ -231,7 +231,7 @@ impl ThemeSettings {
 
         // Register preview font families for the Font Sample Catalog screen
         for (fam_key, data) in preview_fonts {
-            if !is_valid_font_bytes(&data.font) {
+            if !is_valid_font_bytes(data.font.as_ref().as_ref()) {
                 continue;
             }
             fonts.font_data.insert(fam_key.clone(), Arc::clone(data));
