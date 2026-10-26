@@ -14,6 +14,7 @@
 // along with this program; if not, write to the Free Software
 // Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
 use std::hash::{Hash, Hasher};
+use std::sync::Arc;
 use eframe::egui;
 use crate::config::theme::{
     detect_super_held, shortcut_matches_event, ShortcutSettings, ThemeSettings,
@@ -44,7 +45,8 @@ const SCROLLBAR_WIDTH: f32 = 10.0;
 #[derive(Clone, Default)]
 struct RowCache {
     content_hash: u64,
-    shapes: Vec<egui::Shape>,
+    bg_and_lines: Vec<(egui::Rect, egui::Color32)>,
+    text_shapes: Vec<egui::Shape>,
 }
 
 #[derive(Clone, PartialEq)]
@@ -71,7 +73,8 @@ pub struct TerminalPane {
     pub super_key_latched: bool,
     grid_cache_meta: Option<GridCacheMeta>,
     row_caches: Vec<RowCache>,
-    flat_shapes: Vec<egui::Shape>,
+    cached_bg_mesh: Arc<egui::Mesh>,
+    flat_text_shapes: Vec<egui::Shape>,
     last_rendered_gen: u64,
     last_rendered_scroll: usize,
     last_rendered_sel: Option<((u16, u16), (u16, u16))>,
@@ -118,7 +121,8 @@ impl TerminalPane {
             super_key_latched: false,
             grid_cache_meta: None,
             row_caches: Vec::new(),
-            flat_shapes: Vec::new(),
+            cached_bg_mesh: Arc::new(egui::Mesh::default()),
+            flat_text_shapes: Vec::new(),
             last_rendered_gen: u64::MAX,
             last_rendered_scroll: usize::MAX,
             last_rendered_sel: None,
@@ -460,7 +464,7 @@ impl TerminalPane {
         let painter = ui.painter_at(full_rect);
         painter.rect_filled(full_rect, 0.0, settings.terminal_bg_color_with_opacity());
 
-        // Draw cells with Row-Level Dirty Caching
+        // Draw cells with Pre-Tessellated Mesh + Text Caching
         let (rows, cols) = self.backend.size();
         let norm_selection = self.normalized_selection();
         let cur_gen = self.backend.generation();
@@ -555,7 +559,8 @@ impl TerminalPane {
                 }
 
                 cache.content_hash = row_hash;
-                cache.shapes.clear();
+                cache.bg_and_lines.clear();
+                cache.text_shapes.clear();
 
                 let row_y = rect.min.y + pad + (r as f32) * char_h;
 
@@ -583,9 +588,8 @@ impl TerminalPane {
                             egui::pos2(rect.min.x + pad + (start_c as f32) * char_w, row_y),
                             egui::vec2(((c - start_c) as f32) * char_w, char_h),
                         );
-                        cache.shapes.push(egui::Shape::rect_filled(
+                        cache.bg_and_lines.push((
                             run_rect,
-                            0.0,
                             egui::Color32::from_rgb(bg.0, bg.1, bg.2),
                         ));
                     } else {
@@ -598,9 +602,8 @@ impl TerminalPane {
                         egui::pos2(rect.min.x + pad + (sel_c_start as f32) * char_w, row_y),
                         egui::vec2(((sel_c_end - sel_c_start + 1) as f32) * char_w, char_h),
                     );
-                    cache.shapes.push(egui::Shape::rect_filled(
+                    cache.bg_and_lines.push((
                         sel_rect,
-                        0.0,
                         egui::Color32::from_rgba_unmultiplied(70, 130, 210, 110),
                     ));
                 }
@@ -624,7 +627,7 @@ impl TerminalPane {
                             let galley = ui.fonts_mut(|f| {
                                 f.layout_no_wrap(cell.ch.to_string(), font_id.clone(), fg_color)
                             });
-                            cache.shapes.push(egui::Shape::galley(
+                            cache.text_shapes.push(egui::Shape::galley(
                                 egui::pos2(cell_x, row_y + glyph_y_offset),
                                 galley,
                                 fg_color,
@@ -632,10 +635,11 @@ impl TerminalPane {
                         }
                         if cell.underline {
                             let y = (row_y + glyph_y_offset + ink_max_y).min(row_y + char_h - 1.0);
-                            cache.shapes.push(egui::Shape::line_segment(
-                                [egui::pos2(cell_x, y), egui::pos2(cell_x + char_w * 2.0, y)],
-                                egui::Stroke::new(1.0, fg_color),
-                            ));
+                            let ul_rect = egui::Rect::from_min_size(
+                                egui::pos2(cell_x, y),
+                                egui::vec2(char_w * 2.0, 1.0),
+                            );
+                            cache.bg_and_lines.push((ul_rect, fg_color));
                         }
                         c += 1;
                         continue;
@@ -672,7 +676,7 @@ impl TerminalPane {
                     let galley = ui.fonts_mut(|f| {
                         f.layout_no_wrap(run_text.clone(), font_id.clone(), fg_color)
                     });
-                    cache.shapes.push(egui::Shape::galley(
+                    cache.text_shapes.push(egui::Shape::galley(
                         egui::pos2(start_x, row_y + glyph_y_offset),
                         galley,
                         fg_color,
@@ -681,18 +685,32 @@ impl TerminalPane {
                     if has_underline {
                         let y = (row_y + glyph_y_offset + ink_max_y).min(row_y + char_h - 1.0);
                         let width_px = ((c - start_c) as f32) * char_w;
-                        cache.shapes.push(egui::Shape::line_segment(
-                            [egui::pos2(start_x, y), egui::pos2(start_x + width_px, y)],
-                            egui::Stroke::new(1.0, fg_color),
-                        ));
+                        let ul_rect = egui::Rect::from_min_size(
+                            egui::pos2(start_x, y),
+                            egui::vec2(width_px, 1.0),
+                        );
+                        cache.bg_and_lines.push((ul_rect, fg_color));
                     }
                 }
             }
-            painter.add(egui::Shape::Vec(self.flat_shapes.clone()));
+
+            let mut bg_mesh = egui::Mesh::default();
+            self.flat_text_shapes.clear();
+            for row_cache in &self.row_caches {
+                for &(r_rect, color) in &row_cache.bg_and_lines {
+                    bg_mesh.add_colored_rect(r_rect, color);
+                }
+                self.flat_text_shapes
+                    .extend(row_cache.text_shapes.iter().cloned());
+            }
+            self.cached_bg_mesh = Arc::new(bg_mesh);
         }
 
-        for row_cache in &self.row_caches {
-            painter.extend(row_cache.shapes.iter().cloned());
+        if !self.cached_bg_mesh.is_empty() {
+            painter.add(egui::Shape::mesh(Arc::clone(&self.cached_bg_mesh)));
+        }
+        if !self.flat_text_shapes.is_empty() {
+            painter.add(egui::Shape::Vec(self.flat_text_shapes.clone()));
         }
 
         // Draw cursor
