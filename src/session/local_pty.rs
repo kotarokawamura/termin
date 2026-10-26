@@ -1,20 +1,7 @@
-// Copyright (C) [2026/10/19] kotaro,termin
-//
-// This program is free software; you can redistribute it and/or
-// modify it under the terms of the GNU General Public License
-// as published by the Free Software Foundation; version 2
-// of the License.
-//
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU General Public License for more details.
-//
-// You should have received a copy of the GNU General Public License
-// along with this program; if not, write to the Free Software
-// Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
+// src/session/local_pty.rs
 use std::io::{Read, Write};
-use std::sync::mpsc::{self, Receiver};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{mpsc::{self, Receiver}, Arc};
 use std::thread;
 use eframe::egui;
 use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize};
@@ -25,6 +12,8 @@ pub struct LocalPtySession {
     writer: Option<Box<dyn Write + Send>>,
     child: Option<Box<dyn Child + Send + Sync>>,
     rx: Receiver<Vec<u8>>,
+    wakeup_pending: Arc<AtomicBool>,
+    exited: Arc<AtomicBool>,
 }
 
 impl LocalPtySession {
@@ -40,6 +29,8 @@ impl LocalPtySession {
         wakeup_ctx: Option<egui::Context>,
     ) -> Self {
         let (tx, rx) = mpsc::channel();
+        let wakeup_pending = Arc::new(AtomicBool::new(false));
+        let exited = Arc::new(AtomicBool::new(false));
         let pty_system = native_pty_system();
 
         let pair = pty_system.openpty(PtySize {
@@ -66,6 +57,8 @@ impl LocalPtySession {
             let writer = pair.master.take_writer().ok();
 
             if let Ok(mut reader) = pair.master.try_clone_reader() {
+                let pending_flag = Arc::clone(&wakeup_pending);
+                let exited_flag = Arc::clone(&exited);
                 thread::spawn(move || {
                     let mut buf = [0u8; 8192];
                     while let Ok(n) = reader.read(&mut buf) {
@@ -75,12 +68,14 @@ impl LocalPtySession {
                         if tx.send(buf[..n].to_vec()).is_err() {
                             break;
                         }
-                        // イベント駆動モード時：PTY出力が来たら即座にUIスレッドを起こす
-                        if let Some(ctx) = &wakeup_ctx {
-                            ctx.request_repaint();
+                        // UIスレッドがまだ読み出していなければ、1回だけ request_repaint を送る
+                        if !pending_flag.swap(true, Ordering::AcqRel) {
+                            if let Some(ctx) = &wakeup_ctx {
+                                ctx.request_repaint();
+                            }
                         }
                     }
-                    // シェル終了（Ctrl+D等）時にもパネルクローズ処理のためUIスレッドを起こす
+                    exited_flag.store(true, Ordering::Release);
                     if let Some(ctx) = &wakeup_ctx {
                         ctx.request_repaint();
                     }
@@ -92,26 +87,18 @@ impl LocalPtySession {
                 writer,
                 child,
                 rx,
+                wakeup_pending,
+                exited,
             }
         } else {
+            exited.store(true, Ordering::Release);
             Self {
                 master: None,
                 writer: None,
                 child: None,
                 rx,
-            }
-        }
-    }
-}
-
-impl Drop for LocalPtySession {
-    fn drop(&mut self) {
-        self.writer.take();
-        self.master.take();
-        if let Some(child) = &mut self.child {
-            if let Ok(None) = child.try_wait() {
-                let _ = child.kill();
-                let _ = child.wait();
+                wakeup_pending,
+                exited,
             }
         }
     }
@@ -119,6 +106,8 @@ impl Drop for LocalPtySession {
 
 impl SessionDriver for LocalPtySession {
     fn read_output(&mut self) -> Vec<u8> {
+        // 読み出し開始時にフラグをクリア（これ以降の到着で再度 Wakeup が鳴るようにする）
+        self.wakeup_pending.store(false, Ordering::Release);
         let Ok(mut first) = self.rx.try_recv() else {
             return Vec::new();
         };
@@ -147,6 +136,10 @@ impl SessionDriver for LocalPtySession {
     }
 
     fn is_alive(&mut self) -> bool {
+        // リーダーがEOFを検知していない間は waitpid システムコールを一切呼ばない！
+        if !self.exited.load(Ordering::Acquire) {
+            return true;
+        }
         if let Some(child) = &mut self.child {
             match child.try_wait() {
                 Ok(Some(_exit_status)) => false,
