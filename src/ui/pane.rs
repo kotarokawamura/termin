@@ -611,13 +611,13 @@ impl TerminalPane {
                 }
 
 
-                let mut c:NonZeroU16 = NonZeroU16::new(1).unwrap();
-                while c < cols {
-                    let cell = &row_cells[c.get() as usize];
+                let mut c: u16 = 0;
+                while c < cols.get() {
+                    let cell = &row_cells[c as usize];
                     if cell.wide_continuation
                         || ((cell.ch == ' ' || cell.ch == '\0') && !cell.underline)
                     {
-                        c = NonZeroU16::new(c.get() + 1).unwrap();
+                        c += 1;
 
                         continue;
                     }
@@ -625,7 +625,7 @@ impl TerminalPane {
                     let fg_color = resolve_fg(cell);
 
                     if cell.wide {
-                        let cell_x = rect.min.x + pad + (c.get() as f32) * char_w;
+                        let cell_x = rect.min.x + pad + (c as f32) * char_w;
                         if cell.ch != ' ' && cell.ch != '\0' {
                             let galley = ui.fonts_mut(|f| {
                                 f.layout_no_wrap(cell.ch.to_string(), font_id.clone(), fg_color)
@@ -644,7 +644,7 @@ impl TerminalPane {
                             );
                             cache.bg_and_lines.push((ul_rect, fg_color));
                         }
-                        c = NonZeroU16::new(c.get() + 1).unwrap();
+                        c += 1;
 
                         continue;
                     }
@@ -653,16 +653,16 @@ impl TerminalPane {
                     let has_underline = cell.underline;
                     run_text.clear();
                     run_text.push(if cell.ch == '\0' { ' ' } else { cell.ch });
-                    c = NonZeroU16::new(c.get() + 1).unwrap();
+                    c += 1;
 
-                    while c < cols {
-                        let next = &row_cells[c.get() as usize];
+                    while c < cols.get() {
+                        let next = &row_cells[c as usize];
                         if next.wide || next.wide_continuation || next.underline != has_underline {
                             break;
                         }
                         if (next.ch == ' ' || next.ch == '\0') && !has_underline {
-                            let peek_empty = (NonZeroU16::new(c.get() + 1).unwrap() >= cols) || {
-                                let peek = &row_cells[NonZeroU16::new(c.get() + 1).unwrap().get() as usize];
+                            let peek_empty = (c + 1 >= cols.get()) || {
+                                let peek = &row_cells[(c + 1) as usize];
                                 peek.ch == ' ' || peek.ch == '\0'
                             };
                             if peek_empty {
@@ -673,10 +673,10 @@ impl TerminalPane {
                             break;
                         }
                         run_text.push(if next.ch == '\0' { ' ' } else { next.ch });
-                        c = NonZeroU16::new(c.get() + 1).unwrap();
+                        c += 1;
                     }
 
-                    let start_x = rect.min.x + pad + (start_c.get() as f32) * char_w;
+                    let start_x = rect.min.x + pad + (start_c as f32) * char_w;
                     let galley = ui.fonts_mut(|f| {
                         f.layout_no_wrap(run_text.clone(), font_id.clone(), fg_color)
                     });
@@ -688,7 +688,7 @@ impl TerminalPane {
 
                     if has_underline {
                         let y = (row_y + glyph_y_offset + ink_max_y).min(row_y + char_h - 1.0);
-                        let width_px = ((c.get() - start_c.get()) as f32) * char_w;
+                        let width_px = ((c - start_c) as f32) * char_w;
                         let ul_rect = egui::Rect::from_min_size(
                             egui::pos2(start_x, y),
                             egui::vec2(width_px, 1.0),
