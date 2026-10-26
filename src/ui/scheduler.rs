@@ -67,15 +67,11 @@ impl RepaintScheduler {
 
         match self.mode {
             PollMode::ContinuousFps => {
-                // 常に一定間隔で再描画を予約し続ける
+                let fps = target_fps.clamp(1, 240) as u64;
+                let interval = Duration::from_millis((1000 / fps).max(1));
                 ctx.request_repaint_after(interval);
             }
             PollMode::EventDriven => {
-                // 直近でPTY出力があった場合は、連続出力時のフレームレート上限（スロットリング）として
-                // interval 後に次フレームを確認する。出力がなければタイマーを仕掛けずスリープさせる。
-                if pty_updated {
-                    ctx.request_repaint_after(interval);
-                }
             }
         }
     }

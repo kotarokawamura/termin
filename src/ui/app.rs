@@ -38,6 +38,7 @@ struct X11PinchListener {
     net_active_window_atom: u32,
     startup_focus_remaining: u8,
     last_scale: f32,
+    last_poll: std::time::Instant,
 }
 
 impl X11PinchListener {
@@ -77,8 +78,6 @@ impl X11PinchListener {
             }
         }
 
-        // Ensure WM_HINTS declares InputHint = True (1) so X11 window managers give
-        // keyboard focus to this borderless window upon startup.
         let wm_hints: [u32; 9] = [1u32 | 2u32, 1, 1, 0, 0, 0, 0, 0, 0];
         let _ = conn.change_property32(
             PropMode::REPLACE,
@@ -104,11 +103,10 @@ impl X11PinchListener {
             net_active_window_atom,
             startup_focus_remaining: 15,
             last_scale: 1.0,
+            last_poll: std::time::Instant::now(),
         })
     }
 
-    /// Ensure the X11 window actually receives OS keyboard input focus on startup
-    /// once it transitions to `MapState::VIEWABLE`.
     fn ensure_startup_focus(&mut self, egui_focused: bool) {
         if self.startup_focus_remaining == 0 {
             return;
@@ -150,6 +148,13 @@ impl X11PinchListener {
     }
 
     fn poll_zoom_delta(&mut self) -> f32 {
+        // マウス高頻度移動時（500Hz〜1000Hz）に毎回システムコールを発行しないよう 30Hz (33ms) に制限
+        let now = std::time::Instant::now();
+        if now.duration_since(self.last_poll) < std::time::Duration::from_millis(33) {
+            return 1.0;
+        }
+        self.last_poll = now;
+
         let mut zoom_delta = 1.0_f32;
         while let Ok(Some(ev)) = self.conn.poll_for_event() {
             match ev {
@@ -183,6 +188,7 @@ pub struct TerminApp {
     x11_pinch_listener: Option<X11PinchListener>,
     x11_pinch_init_attempted: bool,
     startup_focus_frames: u8,
+    current_zoom_delta: f32,
 }
 
 impl TerminApp {
@@ -223,9 +229,10 @@ impl TerminApp {
             x11_pinch_listener,
             x11_pinch_init_attempted,
             startup_focus_frames: 10,
+            current_zoom_delta: 1.0,
         }
     }
-    /// Handle custom borderless window edge and corner resizing.
+
     fn handle_custom_resize_frame(&self, ctx: &egui::Context) {
         if self.prefs_window.any_open()
             || egui::Popup::is_any_open(ctx)
@@ -289,9 +296,7 @@ impl TerminApp {
 }
 
 impl eframe::App for TerminApp {
-    fn ui(&mut self, ui: &mut Ui, frame: &mut Frame) {
-        let ctx = ui.ctx().clone();
-
+    fn logic(&mut self, ctx: &egui::Context, frame: &mut Frame) {
         if !self.x11_pinch_init_attempted {
             self.x11_pinch_init_attempted = true;
             if let Ok(handle) = frame.window_handle() {
@@ -310,7 +315,7 @@ impl eframe::App for TerminApp {
             }
         }
 
-        let external_zoom_delta = self
+        self.current_zoom_delta = self
             .x11_pinch_listener
             .as_mut()
             .map(|l| {
@@ -318,27 +323,31 @@ impl eframe::App for TerminApp {
                 l.poll_zoom_delta()
             })
             .unwrap_or(1.0);
-        if (external_zoom_delta - 1.0).abs() > 0.001 {
+        if (self.current_zoom_delta - 1.0).abs() > 0.001 {
             ctx.request_repaint();
         }
 
-        // Poll active PTY sessions
         let pty_updated = self.workspace.poll_sessions();
-
-        // Scheduler モジュールに次フレームのスケジューリングを委譲
         self.scheduler.schedule_next_frame(
-            &ctx,
+            ctx,
             pty_updated,
             self.settings.effective_fps(),
         );
+    }
 
+    fn ui(&mut self, ui: &mut Ui, _frame: &mut Frame) {
+        let ctx = ui.ctx().clone();
 
-        // Apply separator color to egui style
-        ctx.all_styles_mut(|style| {
-            style.visuals.widgets.noninteractive.bg_stroke.color = self.settings.separator_color();
-        });
+        self.handle_custom_resize_frame(&ctx);
 
-        // Preferences floating window rendered before workspace so pointer/keyboard capture states are accurate
+        let sep_color = self.settings.separator_color();
+        if ui.style().visuals.widgets.noninteractive.bg_stroke.color != sep_color {
+            ctx.all_styles_mut(|style| {
+                style.visuals.widgets.noninteractive.bg_stroke.color = sep_color;
+            });
+        }
+
+        let prefs_was_open = self.prefs_window.any_open();
         self.prefs_window.ui(&ctx, &mut self.settings);
         if self.prefs_window.save_layout_requested {
             self.prefs_window.save_layout_requested = false;
@@ -348,9 +357,6 @@ impl eframe::App for TerminApp {
             self.prefs_window.load_layout_requested = false;
             self.workspace.load_layout();
         }
-
-        // Handle edge resizing when not over subwindows
-        self.handle_custom_resize_frame(&ctx);
 
         let is_maximized = ctx.input(|i| i.viewport().maximized.unwrap_or(false));
         let border_w = if is_maximized {
@@ -367,8 +373,7 @@ impl eframe::App for TerminApp {
                 self.settings.frame_border_color(),
             ));
 
-        // 設定画面が開いていても、マウスが設定画面上にない＆設定画面のTextEditやRecord中ではない時は後ろのパネルを操作可能にする
-        let prefs_capturing_keyboard = self.prefs_window.is_capturing_keyboard(&ctx);
+        let other_screen_open = prefs_was_open || self.prefs_window.any_open();
         let prefs_capturing_pointer = self.prefs_window.is_capturing_pointer(&ctx);
         let prefs_dragging = self.prefs_window.subwindow_dragging;
 
@@ -379,16 +384,11 @@ impl eframe::App for TerminApp {
                 &mut self.settings,
                 &self.menu_manager,
                 &mut self.prefs_window.open,
-                prefs_capturing_keyboard,
+                other_screen_open,
                 prefs_capturing_pointer,
                 prefs_dragging,
-                external_zoom_delta,
+                self.current_zoom_delta,
             );
-            if self.workspace.toggle_prefs_collapse_requested {
-                self.workspace.toggle_prefs_collapse_requested = false;
-                self.prefs_window.toggle_collapse_requested = true;
-                ctx.request_repaint();
-            }
         });
     }
 }

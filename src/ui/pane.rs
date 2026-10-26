@@ -13,8 +13,8 @@
 // You should have received a copy of the GNU General Public License
 // along with this program; if not, write to the Free Software
 // Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
+use std::hash::{Hash, Hasher};
 use eframe::egui;
-// ファイル冒頭の import を更新
 use crate::config::theme::{
     detect_super_held, shortcut_matches_event, ShortcutSettings, ThemeSettings,
 };
@@ -41,16 +41,19 @@ pub struct PaneUiOutput {
 
 const SCROLLBAR_WIDTH: f32 = 10.0;
 
+#[derive(Clone, Default)]
+struct RowCache {
+    content_hash: u64,
+    shapes: Vec<egui::Shape>,
+}
+
 #[derive(Clone, PartialEq)]
-struct CellCacheKey {
-    generation: u64,
-    scroll_offset: usize,
+struct GridCacheMeta {
     rect_min_x: i32,
     rect_min_y: i32,
     rows: u16,
     cols: u16,
     font_size_bits: u32,
-    selection: Option<((u16, u16), (u16, u16))>,
 }
 
 pub struct TerminalPane {
@@ -66,10 +69,19 @@ pub struct TerminalPane {
     select_anchor_pos: Option<egui::Pos2>,
     pub pending_paste: bool,
     pub super_key_latched: bool,
-    cell_cache_key: Option<CellCacheKey>, // 追加
-    cached_cell_shapes: Vec<egui::Shape>, // 追加
+    grid_cache_meta: Option<GridCacheMeta>,
+    row_caches: Vec<RowCache>,
+    flat_shapes: Vec<egui::Shape>,
+    last_rendered_gen: u64,
+    last_rendered_scroll: usize,
+    last_rendered_sel: Option<((u16, u16), (u16, u16))>,
 }
+
 impl TerminalPane {
+    #[allow(dead_code)]
+    pub fn new(id: usize, title: &str) -> Self {
+        Self::new_with_wakeup(id, title, None, None)
+    }
 
     pub fn new_with_command(id: usize, title: &str, startup_command: Option<&str>) -> Self {
         Self::new_with_wakeup(id, title, startup_command, None)
@@ -104,8 +116,12 @@ impl TerminalPane {
             select_anchor_pos: None,
             pending_paste: false,
             super_key_latched: false,
-            cell_cache_key: None,
-            cached_cell_shapes: Vec::new(),
+            grid_cache_meta: None,
+            row_caches: Vec::new(),
+            flat_shapes: Vec::new(),
+            last_rendered_gen: u64::MAX,
+            last_rendered_scroll: usize::MAX,
+            last_rendered_sel: None,
         }
     }
 
@@ -184,7 +200,6 @@ impl TerminalPane {
             full_rect.max,
         );
 
-        // ポインタが設定画面やポップアップ等のフローティングレイヤー上にあるか厳密に判定
         let pointer_over_floating = ui
             .input(|i| {
                 i.pointer
@@ -206,8 +221,6 @@ impl TerminalPane {
         let term_resp = ui.interact(rect, canvas_id, canvas_sense);
         let scrollbar_resp = ui.interact(scrollbar_rect, scrollbar_id, canvas_sense);
 
-        // 設定画面のTextEdit等にフォーカスがある状態でも、設定画面の外（後ろのパネル上）をクリックしたら
-        // 設定画面のフォーカスを外してこのパネルをアクティブにする
         if !ctx.popup_open
             && !pointer_over_floating
             && (term_resp.clicked()
@@ -280,8 +293,6 @@ impl TerminalPane {
         let term_font_size =
             (settings.effective_terminal_font_size() * self.zoom_scale).clamp(6.0, 64.0);
         let font_id = egui::FontId::monospace(term_font_size);
-        let term_font_size =
-            (settings.effective_terminal_font_size() * self.zoom_scale).clamp(6.0, 64.0);
         let char_w = (term_font_size * 0.6).max(4.0);
 
         let ink_max_y = ui.fonts_mut(|f| f.row_height(&font_id));
@@ -316,7 +327,8 @@ impl TerminalPane {
 
         let primary_pressed = ui.input(|i| i.pointer.button_pressed(egui::PointerButton::Primary));
         let primary_down = ui.input(|i| i.pointer.button_down(egui::PointerButton::Primary));
-        let primary_released = ui.input(|i| i.pointer.button_released(egui::PointerButton::Primary));
+        let primary_released =
+            ui.input(|i| i.pointer.button_released(egui::PointerButton::Primary));
         let pointer_pos = ui.input(|i| {
             i.pointer
                 .interact_pos()
@@ -446,26 +458,38 @@ impl TerminalPane {
         }
 
         let painter = ui.painter_at(full_rect);
-        // 設定されたパネル背景色と透明度で塗りつぶす（デフォルトは #000000 の真っ黒）
         painter.rect_filled(full_rect, 0.0, settings.terminal_bg_color_with_opacity());
 
-        // Draw cells in two passes (with Shape caching for zero-cost mouse movement)
+        // Draw cells with Row-Level Dirty Caching
         let (rows, cols) = self.backend.size();
         let norm_selection = self.normalized_selection();
+        let cur_gen = self.backend.generation();
+        let cur_scroll = self.backend.scroll_offset();
 
-        let current_cache_key = CellCacheKey {
-            generation: self.backend.generation(),
-            scroll_offset: self.backend.scroll_offset(),
+        let meta = GridCacheMeta {
             rect_min_x: (rect.min.x * 10.0).round() as i32,
             rect_min_y: (rect.min.y * 10.0).round() as i32,
             rows,
             cols,
             font_size_bits: term_font_size.to_bits(),
-            selection: norm_selection,
         };
 
-        if self.cell_cache_key.as_ref() != Some(&current_cache_key) {
-            let mut shapes = Vec::with_capacity((rows as usize) * 4);
+        let layout_changed = self.grid_cache_meta.as_ref() != Some(&meta);
+        if layout_changed {
+            self.row_caches.clear();
+            self.row_caches.resize_with(rows as usize, RowCache::default);
+            self.grid_cache_meta = Some(meta);
+        }
+
+        if layout_changed
+            || cur_gen != self.last_rendered_gen
+            || cur_scroll != self.last_rendered_scroll
+            || norm_selection != self.last_rendered_sel
+        {
+            self.last_rendered_gen = cur_gen;
+            self.last_rendered_scroll = cur_scroll;
+            self.last_rendered_sel = norm_selection;
+
             let is_default_bg =
                 |cell: &crate::vte::RenderableCell, bg: crate::vte::RgbColor| -> bool {
                     !cell.inverse
@@ -473,25 +497,84 @@ impl TerminalPane {
                         || bg == crate::vte::RgbColor(0, 0, 0))
                 };
 
-            // Pass 1: 非デフォルト背景色と選択範囲の矩形を横方向に結合して生成
+            let resolve_fg = |cell: &crate::vte::RenderableCell| -> egui::Color32 {
+                let mut fg = if cell.inverse { cell.bg } else { cell.fg };
+                if cell.bold {
+                    fg = crate::vte::RgbColor(
+                        fg.0.saturating_add(25),
+                        fg.1.saturating_add(25),
+                        fg.2.saturating_add(25),
+                    );
+                }
+                egui::Color32::from_rgb(fg.0, fg.1, fg.2)
+            };
+
+            let mut row_cells = Vec::with_capacity(cols as usize);
+            let mut run_text = String::with_capacity(cols as usize);
+
             for r in 0..rows {
+                row_cells.clear();
+                let mut hasher = std::collections::hash_map::DefaultHasher::new();
+
+                let row_sel = norm_selection.and_then(|(start, end)| {
+                    if r >= start.0 && r <= end.0 {
+                        let sc = if r == start.0 { start.1 } else { 0 };
+                        let ec = if r == end.0 {
+                            end.1.min(cols.saturating_sub(1))
+                        } else {
+                            cols.saturating_sub(1)
+                        };
+                        (sc <= ec).then_some((sc, ec))
+                    } else {
+                        None
+                    }
+                });
+                row_sel.hash(&mut hasher);
+
+                for c in 0..cols {
+                    let cell = self.backend.read_cell(r, c);
+                    cell.ch.hash(&mut hasher);
+                    (cell.fg.0, cell.fg.1, cell.fg.2).hash(&mut hasher);
+                    (cell.bg.0, cell.bg.1, cell.bg.2).hash(&mut hasher);
+                    (
+                        cell.bold,
+                        cell.underline,
+                        cell.inverse,
+                        cell.wide,
+                        cell.wide_continuation,
+                    )
+                        .hash(&mut hasher);
+                    row_cells.push(cell);
+                }
+
+                let row_hash = hasher.finish();
+                let cache = &mut self.row_caches[r as usize];
+
+                if !layout_changed && cache.content_hash == row_hash {
+                    continue;
+                }
+
+                cache.content_hash = row_hash;
+                cache.shapes.clear();
+
                 let row_y = rect.min.y + pad + (r as f32) * char_h;
+
+                // Pass 1 (Row): 背景矩形と選択範囲
                 let mut c = 0;
                 while c < cols {
-                    let cell = self.backend.read_cell(r, c);
+                    let cell = &row_cells[c as usize];
                     let bg = if cell.inverse { cell.fg } else { cell.bg };
-
-                    if !is_default_bg(&cell, bg) {
+                    if !is_default_bg(cell, bg) {
                         let start_c = c;
                         c += 1;
                         while c < cols {
-                            let next_cell = self.backend.read_cell(r, c);
+                            let next_cell = &row_cells[c as usize];
                             let next_bg = if next_cell.inverse {
                                 next_cell.fg
                             } else {
                                 next_cell.bg
                             };
-                            if is_default_bg(&next_cell, next_bg) || next_bg != bg {
+                            if is_default_bg(next_cell, next_bg) || next_bg != bg {
                                 break;
                             }
                             c += 1;
@@ -500,7 +583,7 @@ impl TerminalPane {
                             egui::pos2(rect.min.x + pad + (start_c as f32) * char_w, row_y),
                             egui::vec2(((c - start_c) as f32) * char_w, char_h),
                         );
-                        shapes.push(egui::Shape::rect_filled(
+                        cache.shapes.push(egui::Shape::rect_filled(
                             run_rect,
                             0.0,
                             egui::Color32::from_rgb(bg.0, bg.1, bg.2),
@@ -510,37 +593,22 @@ impl TerminalPane {
                     }
                 }
 
-                if let Some((start, end)) = norm_selection {
-                    if r >= start.0 && r <= end.0 {
-                        let sel_c_start = if r == start.0 { start.1 } else { 0 };
-                        let sel_c_end = if r == end.0 {
-                            end.1.min(cols.saturating_sub(1))
-                        } else {
-                            cols.saturating_sub(1)
-                        };
-                        if sel_c_start <= sel_c_end {
-                            let sel_rect = egui::Rect::from_min_size(
-                                egui::pos2(rect.min.x + pad + (sel_c_start as f32) * char_w, row_y),
-                                egui::vec2(((sel_c_end - sel_c_start + 1) as f32) * char_w, char_h),
-                            );
-                            shapes.push(egui::Shape::rect_filled(
-                                sel_rect,
-                                0.0,
-                                egui::Color32::from_rgba_unmultiplied(70, 130, 210, 110),
-                            ));
-                        }
-                    }
+                if let Some((sel_c_start, sel_c_end)) = row_sel {
+                    let sel_rect = egui::Rect::from_min_size(
+                        egui::pos2(rect.min.x + pad + (sel_c_start as f32) * char_w, row_y),
+                        egui::vec2(((sel_c_end - sel_c_start + 1) as f32) * char_w, char_h),
+                    );
+                    cache.shapes.push(egui::Shape::rect_filled(
+                        sel_rect,
+                        0.0,
+                        egui::Color32::from_rgba_unmultiplied(70, 130, 210, 110),
+                    ));
                 }
-            }
 
-            // Pass 2: テキストと下線をバッチ生成
-            let mut run_text = String::with_capacity(cols as usize);
-            for r in 0..rows {
-                let row_y = rect.min.y + pad + (r as f32) * char_h;
+                // Pass 2 (Row): テキストと下線
                 let mut c = 0;
-
                 while c < cols {
-                    let cell = self.backend.read_cell(r, c);
+                    let cell = &row_cells[c as usize];
                     if cell.wide_continuation
                         || ((cell.ch == ' ' || cell.ch == '\0') && !cell.underline)
                     {
@@ -548,19 +616,7 @@ impl TerminalPane {
                         continue;
                     }
 
-                    let resolve_fg = |cell: &crate::vte::RenderableCell| -> egui::Color32 {
-                        let mut fg = if cell.inverse { cell.bg } else { cell.fg };
-                        if cell.bold {
-                            fg = crate::vte::RgbColor(
-                                fg.0.saturating_add(25),
-                                fg.1.saturating_add(25),
-                                fg.2.saturating_add(25),
-                            );
-                        }
-                        egui::Color32::from_rgb(fg.0, fg.1, fg.2)
-                    };
-
-                    let fg_color = resolve_fg(&cell);
+                    let fg_color = resolve_fg(cell);
 
                     if cell.wide {
                         let cell_x = rect.min.x + pad + (c as f32) * char_w;
@@ -568,7 +624,7 @@ impl TerminalPane {
                             let galley = ui.fonts_mut(|f| {
                                 f.layout_no_wrap(cell.ch.to_string(), font_id.clone(), fg_color)
                             });
-                            shapes.push(egui::Shape::galley(
+                            cache.shapes.push(egui::Shape::galley(
                                 egui::pos2(cell_x, row_y + glyph_y_offset),
                                 galley,
                                 fg_color,
@@ -576,7 +632,7 @@ impl TerminalPane {
                         }
                         if cell.underline {
                             let y = (row_y + glyph_y_offset + ink_max_y).min(row_y + char_h - 1.0);
-                            shapes.push(egui::Shape::line_segment(
+                            cache.shapes.push(egui::Shape::line_segment(
                                 [egui::pos2(cell_x, y), egui::pos2(cell_x + char_w * 2.0, y)],
                                 egui::Stroke::new(1.0, fg_color),
                             ));
@@ -592,20 +648,20 @@ impl TerminalPane {
                     c += 1;
 
                     while c < cols {
-                        let next = self.backend.read_cell(r, c);
+                        let next = &row_cells[c as usize];
                         if next.wide || next.wide_continuation || next.underline != has_underline {
                             break;
                         }
                         if (next.ch == ' ' || next.ch == '\0') && !has_underline {
                             let peek_empty = (c + 1 >= cols) || {
-                                let peek = self.backend.read_cell(r, c + 1);
+                                let peek = &row_cells[(c + 1) as usize];
                                 peek.ch == ' ' || peek.ch == '\0'
                             };
                             if peek_empty {
                                 break;
                             }
                         }
-                        if resolve_fg(&next) != fg_color {
+                        if resolve_fg(next) != fg_color {
                             break;
                         }
                         run_text.push(if next.ch == '\0' { ' ' } else { next.ch });
@@ -616,7 +672,7 @@ impl TerminalPane {
                     let galley = ui.fonts_mut(|f| {
                         f.layout_no_wrap(run_text.clone(), font_id.clone(), fg_color)
                     });
-                    shapes.push(egui::Shape::galley(
+                    cache.shapes.push(egui::Shape::galley(
                         egui::pos2(start_x, row_y + glyph_y_offset),
                         galley,
                         fg_color,
@@ -625,20 +681,20 @@ impl TerminalPane {
                     if has_underline {
                         let y = (row_y + glyph_y_offset + ink_max_y).min(row_y + char_h - 1.0);
                         let width_px = ((c - start_c) as f32) * char_w;
-                        shapes.push(egui::Shape::line_segment(
+                        cache.shapes.push(egui::Shape::line_segment(
                             [egui::pos2(start_x, y), egui::pos2(start_x + width_px, y)],
                             egui::Stroke::new(1.0, fg_color),
                         ));
                     }
                 }
             }
-
-            self.cached_cell_shapes = shapes;
-            self.cell_cache_key = Some(current_cache_key);
+            painter.add(egui::Shape::Vec(self.flat_shapes.clone()));
         }
 
-        // キャッシュされた Shape 群を一括描画（Galley は内部が Arc なので clone コストは極小）
-        painter.extend(self.cached_cell_shapes.iter().cloned());
+        for row_cache in &self.row_caches {
+            painter.extend(row_cache.shapes.iter().cloned());
+        }
+
         // Draw cursor
         let cursor = self.backend.cursor();
         let cursor_visually_active = visually_active && !pane_context_menu_open;
@@ -792,7 +848,6 @@ impl TerminalPane {
         ctx.copy_text(lines.join("\n"));
     }
 
-
     fn handle_keyboard_input(&mut self, ui: &mut egui::Ui, shortcut_handled: bool) {
         if ui.input(|i| {
             !i.events
@@ -801,7 +856,6 @@ impl TerminalPane {
         }) {
             return;
         }
-
         let events = ui.input(|i| i.events.clone());
         let current_mods = ui.input(|i| i.modifiers);
         let super_held = self.super_key_latched || ui.input(detect_super_held);
@@ -825,7 +879,6 @@ impl TerminalPane {
                         }
                         self.session.write_input(text.as_bytes());
                     } else if !shortcut_handled && !current_mods.shift && !super_held {
-                        // ショートカット外の純粋な Ctrl+V のみ 0x16 (^V) を PTY に送る
                         self.session.write_input(&[0x16]);
                     }
                 }
@@ -891,9 +944,6 @@ impl TerminalPane {
         if shortcut_matches_event(&shortcuts.toggle_collapse_preferences, key, physical_key, modifiers, super_held) {
             return (true, Some(TitleBarAction::ToggleCollapsePreferences));
         }
-        if shortcut_matches_event(&shortcuts.open_preferences, key, physical_key, modifiers, super_held) {
-            return (true, Some(TitleBarAction::OpenPreferences));
-        }
         if shortcut_matches_event(&shortcuts.toggle_fullscreen, key, physical_key, modifiers, super_held) {
             return (true, Some(TitleBarAction::ToggleMaximizeWindow));
         }
@@ -930,7 +980,6 @@ impl TerminalPane {
 
         let mut action = None;
         let mut any_shortcut_consumed = false;
-        // ... (以降は今のコードのまま)
 
         let events = ui.input(|i| i.events.clone());
         let current_mods = ui.input(|i| i.modifiers);
@@ -960,7 +1009,6 @@ impl TerminalPane {
                             action = act;
                         }
                     } else if !mods.shift && !super_held {
-                        // 設定されたコピーショートカットに一致せず、純粋な Ctrl+C が押された場合は SIGINT (^C) を送る
                         self.session.write_input(&[0x03]);
                     }
                 }
@@ -1057,7 +1105,7 @@ impl TerminalPane {
 
                     if merged_mods.ctrl && !merged_mods.shift && !merged_mods.alt {
                         let effective_key = physical_key.unwrap_or(key);
-                        let key_name = format!("{:?}", effective_key);
+                        let key_name = effective_key.name();
                         if key_name.len() == 1 {
                             let ch = key_name.chars().next().unwrap();
                             if ch.is_ascii_uppercase() {
@@ -1076,7 +1124,7 @@ impl TerminalPane {
                         }
                     } else if merged_mods.alt && !merged_mods.ctrl && !merged_mods.shift {
                         let effective_key = physical_key.unwrap_or(key);
-                        let key_name = format!("{:?}", effective_key);
+                        let key_name = effective_key.name();
                         if key_name.len() == 1 {
                             let ch = key_name.chars().next().unwrap().to_ascii_lowercase();
                             self.session.write_input(&[0x1b, ch as u8]);

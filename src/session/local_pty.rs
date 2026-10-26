@@ -106,7 +106,6 @@ impl LocalPtySession {
 
 impl SessionDriver for LocalPtySession {
     fn read_output(&mut self) -> Vec<u8> {
-        // 読み出し開始時にフラグをクリア（これ以降の到着で再度 Wakeup が鳴るようにする）
         self.wakeup_pending.store(false, Ordering::Release);
         let Ok(mut first) = self.rx.try_recv() else {
             return Vec::new();
@@ -136,7 +135,6 @@ impl SessionDriver for LocalPtySession {
     }
 
     fn is_alive(&mut self) -> bool {
-        // リーダーがEOFを検知していない間は waitpid システムコールを一切呼ばない！
         if !self.exited.load(Ordering::Acquire) {
             return true;
         }
