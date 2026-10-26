@@ -41,7 +41,7 @@ impl SessionDriver for TmuxControlSession {
         // Send `send-keys -t %pane_id ...` to the tmux -CC control stream
     }
 
-    fn resize(&mut self, _rows: u16, _cols: u16) {
+    fn resize(&mut self, _rows: core::num::NonZeroU16, _cols: core::num::NonZeroU16) {
         // Send `refresh-client -C ...` to the tmux -CC control stream
     }
 

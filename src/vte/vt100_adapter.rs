@@ -1,3 +1,4 @@
+use std::num::NonZeroU16;
 // Copyright (C) [2026/10/19] kotaro,termin
 //
 // This program is free software; you can redistribute it and/or
@@ -21,14 +22,14 @@ const SCROLLBACK_LEN: usize = 5000;
 
 pub struct Vt100Adapter {
     parser: vt100::Parser,
-    rows: u16,
-    cols: u16,
+    rows: NonZeroU16,
+    cols: NonZeroU16,
     max_scrollback: usize,
     generation: u64,
 }
 
 impl Vt100Adapter {
-    pub fn new(rows: u16, cols: u16) -> Self {
+    pub fn new(rows: core::num::NonZeroU16, cols: core::num::NonZeroU16) -> Self {
         Self {
             parser: vt100::Parser::new(rows, cols, SCROLLBACK_LEN),
             rows,
@@ -57,7 +58,7 @@ impl Vt100Adapter {
         }
         self.parser.process(bytes);
         self.generation = self.generation.wrapping_add(1);
-        let cursor_at_bottom = self.parser.screen().cursor_position().0 + 1 >= self.rows;
+        let cursor_at_bottom = self.parser.screen().cursor_position().0 + 1 >= self.rows.get();
         if cursor_at_bottom || bytes.contains(&b'\n') || bytes.contains(&0x1b) {
             self.refresh_max_scrollback();
         }
@@ -67,8 +68,8 @@ impl Vt100Adapter {
         self.process_bytes(bytes);
     }
 
-    pub fn resize(&mut self, new_rows: u16, new_cols: u16) {
-        if self.rows == new_rows && self.cols == new_cols {
+    pub fn resize(&mut self, new_rows: core::num::NonZeroU16, new_cols: core::num::NonZeroU16) {
+        if self.rows.get() == new_rows.get() && self.cols.get() == new_cols.get() {
             return;
         }
 
@@ -152,7 +153,7 @@ impl Vt100Adapter {
         }
     }
 
-    pub fn size(&self) -> (u16, u16) {
+    pub fn size(&self) -> (NonZeroU16, NonZeroU16) {
         (self.rows, self.cols)
     }
 
@@ -224,13 +225,13 @@ struct SavedCell {
 fn append_physical_row(
     screen: &vt100::Screen,
     r: u16,
-    cols: u16,
+    cols: NonZeroU16,
     preserve_up_to_col: Option<u16>,
     current_line: &mut Vec<SavedCell>,
     logical_lines: &mut Vec<Vec<SavedCell>>,
 ) {
-    let mut row_cells = Vec::with_capacity(cols as usize);
-    for c in 0..cols {
+    let mut row_cells = Vec::with_capacity(cols.get() as usize);
+    for c in 0..cols.get() {
         if let Some(cell) = screen.cell(r, c) {
             let is_cont = cell.is_wide_continuation();
             let s = cell.contents();
@@ -289,8 +290,8 @@ fn append_physical_row(
 /// by joining physical rows that were soft-wrapped at the right margin.
 fn extract_all_logical_lines(
     screen: &mut vt100::Screen,
-    rows: u16,
-    cols: u16,
+    rows: NonZeroU16,
+    cols: NonZeroU16,
     max_scrollback: usize,
 ) -> Vec<Vec<SavedCell>> {
     screen.set_scrollback(0);
@@ -298,8 +299,8 @@ fn extract_all_logical_lines(
 
     // Find the last row containing non-empty content on the live screen
     let mut last_active_row = cursor_row;
-    for r in (0..rows).rev() {
-        let has_content = (0..cols).any(|c| {
+    for r in (0..rows.get()).rev() {
+        let has_content = (0..cols.get()).any(|c| {
             screen
                 .cell(r, c)
                 .map(|cell| !cell.contents().is_empty() && cell.contents() != " ")

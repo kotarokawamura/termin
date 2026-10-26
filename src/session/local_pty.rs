@@ -123,11 +123,11 @@ impl SessionDriver for LocalPtySession {
         }
     }
 
-    fn resize(&mut self, rows: u16, cols: u16) {
+    fn resize(&mut self, rows: core::num::NonZeroU16, cols: core::num::NonZeroU16) {
         if let Some(master) = &self.master {
             let _ = master.resize(PtySize {
-                rows,
-                cols,
+                rows: rows.get(),
+                cols: cols.get(),
                 pixel_width: 0,
                 pixel_height: 0,
             });

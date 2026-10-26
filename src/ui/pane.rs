@@ -14,6 +14,7 @@
 // along with this program; if not, write to the Free Software
 // Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
 use std::hash::{Hash, Hasher};
+use std::num::{NonZero, NonZeroU16};
 use std::sync::Arc;
 use eframe::egui;
 use crate::config::theme::{
@@ -53,8 +54,8 @@ struct RowCache {
 struct GridCacheMeta {
     rect_min_x: i32,
     rect_min_y: i32,
-    rows: u16,
-    cols: u16,
+    rows: NonZeroU16,
+    cols: NonZeroU16,
     font_size_bits: u32,
 }
 
@@ -96,12 +97,12 @@ impl TerminalPane {
         startup_command: Option<&str>,
         wakeup_ctx: Option<egui::Context>,
     ) -> Self {
-        let rows = 24;
-        let cols = 80;
+        let rows: core::num::NonZeroU16 = core::num::NonZeroU16::new(24).unwrap();
+        let cols: core::num::NonZeroU16 = core::num::NonZeroU16::new(80).unwrap();
         let backend = Vt100Adapter::new(rows, cols);
         let session = Box::new(LocalPtySession::new_with_command(
-            rows,
-            cols,
+            rows.get(),
+            cols.get(),
             startup_command,
             wakeup_ctx,
         ));
@@ -309,9 +310,9 @@ impl TerminalPane {
 
         let inner_w = (rect.width() - pad * 2.0).max(0.0);
         let inner_h = (rect.height() - pad * 2.0).max(0.0);
-        let new_cols = ((inner_w / char_w).floor() as u16).max(10);
-        let new_rows = ((inner_h / char_h).floor() as u16).max(4);
-        let (cur_rows, cur_cols) = self.backend.size();
+        let new_cols:NonZeroU16 = NonZeroU16::new(((inner_w / char_w).floor() as u16).max(10)).unwrap();
+        let new_rows: NonZeroU16 = NonZeroU16::new(((inner_h / char_h).floor() as u16).max(4)).unwrap();
+        let (cur_rows, cur_cols): (NonZeroU16, NonZeroU16) = self.backend.size();
         if (new_rows, new_cols) != (cur_rows, cur_cols) {
             self.backend.resize(new_rows, new_cols);
             self.session.resize(new_rows, new_cols);
@@ -322,8 +323,8 @@ impl TerminalPane {
         let pos_to_cell = |pos: egui::Pos2| -> (u16, u16) {
             let rel_x = (pos.x - (rect.min.x + pad)).max(0.0);
             let rel_y = (pos.y - (rect.min.y + pad)).max(0.0);
-            let c = ((rel_x / char_w).floor() as u16).min(cols.saturating_sub(1));
-            let r = ((rel_y / char_h).floor() as u16).min(rows.saturating_sub(1));
+            let c = ((rel_x / char_w).floor() as u16).min(cols.get().saturating_sub(1));
+            let r = ((rel_y / char_h).floor() as u16).min(rows.get().saturating_sub(1));
             (r, c)
         };
 
@@ -376,11 +377,11 @@ impl TerminalPane {
 
         // Handle interactive scrollbar click/drag
         let max_scroll = self.backend.max_scroll_offset();
-        let total_lines = (rows as usize) + max_scroll;
+        let total_lines = (rows.get() as usize) + max_scroll;
         let track_pad = 2.0_f32;
         let track_h = (scrollbar_rect.height() - track_pad * 2.0).max(1.0);
         let visible_frac = if total_lines > 0 {
-            ((rows as f32) / (total_lines as f32)).clamp(0.05, 1.0)
+            ((rows.get() as f32) / (total_lines as f32)).clamp(0.05, 1.0)
         } else {
             1.0
         };
@@ -481,7 +482,7 @@ impl TerminalPane {
         let layout_changed = self.grid_cache_meta.as_ref() != Some(&meta);
         if layout_changed {
             self.row_caches.clear();
-            self.row_caches.resize_with(rows as usize, RowCache::default);
+            self.row_caches.resize_with(rows.get() as usize, RowCache::default);
             self.grid_cache_meta = Some(meta);
         }
 
@@ -513,20 +514,21 @@ impl TerminalPane {
                 egui::Color32::from_rgb(fg.0, fg.1, fg.2)
             };
 
-            let mut row_cells = Vec::with_capacity(cols as usize);
-            let mut run_text = String::with_capacity(cols as usize);
+            let mut row_cells = Vec::with_capacity(cols.get() as usize);
+            let mut run_text = String::with_capacity(cols.get() as usize);
 
-            for r in 0..rows {
+            for r in 0..rows.get() {
                 row_cells.clear();
                 let mut hasher = std::collections::hash_map::DefaultHasher::new();
+                let cols_get:u16 = cols.get();
 
                 let row_sel = norm_selection.and_then(|(start, end)| {
                     if r >= start.0 && r <= end.0 {
                         let sc = if r == start.0 { start.1 } else { 0 };
                         let ec = if r == end.0 {
-                            end.1.min(cols.saturating_sub(1))
+                            end.1.min(cols_get.saturating_sub(1))
                         } else {
-                            cols.saturating_sub(1)
+                            cols_get.saturating_sub(1)
                         };
                         (sc <= ec).then_some((sc, ec))
                     } else {
@@ -535,7 +537,7 @@ impl TerminalPane {
                 });
                 row_sel.hash(&mut hasher);
 
-                for c in 0..cols {
+                for c in 0..cols_get {
                     let cell = self.backend.read_cell(r, c);
                     cell.ch.hash(&mut hasher);
                     (cell.fg.0, cell.fg.1, cell.fg.2).hash(&mut hasher);
@@ -566,13 +568,13 @@ impl TerminalPane {
 
                 // Pass 1 (Row): 背景矩形と選択範囲
                 let mut c = 0;
-                while c < cols {
+                while c < cols_get {
                     let cell = &row_cells[c as usize];
                     let bg = if cell.inverse { cell.fg } else { cell.bg };
                     if !is_default_bg(cell, bg) {
                         let start_c = c;
                         c += 1;
-                        while c < cols {
+                        while c < cols_get {
                             let next_cell = &row_cells[c as usize];
                             let next_bg = if next_cell.inverse {
                                 next_cell.fg
@@ -608,21 +610,22 @@ impl TerminalPane {
                     ));
                 }
 
-                // Pass 2 (Row): テキストと下線
-                let mut c = 0;
+
+                let mut c:NonZeroU16 = NonZeroU16::new(1).unwrap();
                 while c < cols {
-                    let cell = &row_cells[c as usize];
+                    let cell = &row_cells[c.get() as usize];
                     if cell.wide_continuation
                         || ((cell.ch == ' ' || cell.ch == '\0') && !cell.underline)
                     {
-                        c += 1;
+                        c = NonZeroU16::new(c.get() + 1).unwrap();
+
                         continue;
                     }
 
                     let fg_color = resolve_fg(cell);
 
                     if cell.wide {
-                        let cell_x = rect.min.x + pad + (c as f32) * char_w;
+                        let cell_x = rect.min.x + pad + (c.get() as f32) * char_w;
                         if cell.ch != ' ' && cell.ch != '\0' {
                             let galley = ui.fonts_mut(|f| {
                                 f.layout_no_wrap(cell.ch.to_string(), font_id.clone(), fg_color)
@@ -641,7 +644,8 @@ impl TerminalPane {
                             );
                             cache.bg_and_lines.push((ul_rect, fg_color));
                         }
-                        c += 1;
+                        c = NonZeroU16::new(c.get() + 1).unwrap();
+
                         continue;
                     }
 
@@ -649,16 +653,16 @@ impl TerminalPane {
                     let has_underline = cell.underline;
                     run_text.clear();
                     run_text.push(if cell.ch == '\0' { ' ' } else { cell.ch });
-                    c += 1;
+                    c = NonZeroU16::new(c.get() + 1).unwrap();
 
                     while c < cols {
-                        let next = &row_cells[c as usize];
+                        let next = &row_cells[c.get() as usize];
                         if next.wide || next.wide_continuation || next.underline != has_underline {
                             break;
                         }
                         if (next.ch == ' ' || next.ch == '\0') && !has_underline {
-                            let peek_empty = (c + 1 >= cols) || {
-                                let peek = &row_cells[(c + 1) as usize];
+                            let peek_empty = (NonZeroU16::new(c.get() + 1).unwrap() >= cols) || {
+                                let peek = &row_cells[NonZeroU16::new(c.get() + 1).unwrap().get() as usize];
                                 peek.ch == ' ' || peek.ch == '\0'
                             };
                             if peek_empty {
@@ -669,10 +673,10 @@ impl TerminalPane {
                             break;
                         }
                         run_text.push(if next.ch == '\0' { ' ' } else { next.ch });
-                        c += 1;
+                        c = NonZeroU16::new(c.get() + 1).unwrap();
                     }
 
-                    let start_x = rect.min.x + pad + (start_c as f32) * char_w;
+                    let start_x = rect.min.x + pad + (start_c.get() as f32) * char_w;
                     let galley = ui.fonts_mut(|f| {
                         f.layout_no_wrap(run_text.clone(), font_id.clone(), fg_color)
                     });
@@ -684,7 +688,7 @@ impl TerminalPane {
 
                     if has_underline {
                         let y = (row_y + glyph_y_offset + ink_max_y).min(row_y + char_h - 1.0);
-                        let width_px = ((c - start_c) as f32) * char_w;
+                        let width_px = ((c.get() - start_c.get()) as f32) * char_w;
                         let ul_rect = egui::Rect::from_min_size(
                             egui::pos2(start_x, y),
                             egui::vec2(width_px, 1.0),
@@ -716,7 +720,7 @@ impl TerminalPane {
         // Draw cursor
         let cursor = self.backend.cursor();
         let cursor_visually_active = visually_active && !pane_context_menu_open;
-        if cursor.visible && cursor.row < rows && cursor.col < cols {
+        if cursor.visible && cursor.row < rows.get() && cursor.col < cols.get() {
             let cur_min = egui::pos2(
                 rect.min.x + pad + (cursor.col as f32) * char_w,
                 rect.min.y + pad + (cursor.row as f32) * char_h,
@@ -820,12 +824,12 @@ impl TerminalPane {
         let (rows, cols) = self.backend.size();
         let mut lines = Vec::new();
 
-        for r in start.0..=end.0.min(rows.saturating_sub(1)) {
+        for r in start.0..=end.0.min(rows.get().saturating_sub(1)) {
             let c_start = if r == start.0 { start.1 } else { 0 };
             let c_end = if r == end.0 {
-                end.1.min(cols.saturating_sub(1))
+                end.1.min(cols.get().saturating_sub(1))
             } else {
-                cols.saturating_sub(1)
+                cols.get().saturating_sub(1)
             };
 
             let mut line = String::new();
@@ -850,9 +854,9 @@ impl TerminalPane {
         }
         let (rows, cols) = self.backend.size();
         let mut lines = Vec::new();
-        for r in 0..rows {
+        for r in 0..rows.get() {
             let mut line = String::new();
-            for c in 0..cols {
+            for c in 0..cols.get() {
                 let cell = self.backend.read_cell(r, c);
                 if !cell.wide_continuation {
                     line.push(if cell.ch == '\0' { ' ' } else { cell.ch });
@@ -1149,7 +1153,7 @@ impl TerminalPane {
                         }
                     } else if merged_mods.shift && !merged_mods.ctrl && !merged_mods.alt {
                         let (rows, _) = self.backend.size();
-                        let page_step = (rows as isize / 2).max(1);
+                        let page_step = (rows.get() as isize / 2).max(1);
                         match key {
                             egui::Key::PageUp => {
                                 self.backend.scroll(page_step);

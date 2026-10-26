@@ -20,6 +20,6 @@ pub mod tmux_cc;
 pub trait SessionDriver {
     fn read_output(&mut self) -> Vec<u8>;
     fn write_input(&mut self, data: &[u8]);
-    fn resize(&mut self, rows: u16, cols: u16);
+    fn resize(&mut self, rows: core::num::NonZeroU16, cols: core::num::NonZeroU16);
     fn is_alive(&mut self) -> bool;
 }
