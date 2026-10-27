@@ -17,14 +17,17 @@ use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::sync::Arc;
 use eframe::egui;
-// ファイル冒頭の import を更新
-// ファイル冒頭の import
 use crate::config::theme::{
     color_to_hex, detect_super_held, discover_system_fonts, format_key_shortcut, is_cjk_font,
     is_modifier_only_key, is_monospace_font, is_valid_font_bytes, parse_color,
     shortcut_matches_event, split_shortcut_bindings, ShortcutSettings, ThemeSettings,
 };
 use crate::i18n::{active_catalog_info, discover_po_files, tr};
+
+const LABEL_COL_WIDTH: f32 = 190.0;
+const PREFS_FIXED_HEIGHT: f32 = 500.0;
+const SAMPLE_FIXED_HEIGHT: f32 = 500.0;
+const FOOTER_RESERVED_HEIGHT: f32 = 46.0;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum PrefsTab {
@@ -79,8 +82,6 @@ impl PreferencesWindow {
         self.open || self.font_sample_window_open
     }
 
-    /// マウスカーソルが設定ウィンドウ（またはその上のコンボボックス等のポップアップ）上にあるか、
-    /// あるいは設定ウィンドウをドラッグ中であれば true を返す。
     pub fn is_capturing_pointer(&self, ctx: &egui::Context) -> bool {
         if !self.any_open() {
             return false;
@@ -108,8 +109,6 @@ impl PreferencesWindow {
         false
     }
 
-    /// 設定ウィンドウ内でショートカット録画中、または設定ウィンドウ内の TextEdit 等がフォーカスを持っている場合は true。
-    /// false の場合は設定ウィンドウが開いていても背後のターミナルでキーボード入力を行える。
     pub fn is_capturing_keyboard(&self, ctx: &egui::Context) -> bool {
         if !self.any_open() {
             return false;
@@ -119,6 +118,7 @@ impl PreferencesWindow {
         }
         ctx.egui_wants_keyboard_input()
     }
+
     pub fn ui(&mut self, ctx: &egui::Context, settings: &mut ThemeSettings) {
         self.window_rects.clear();
         self.subwindow_dragging = false;
@@ -141,7 +141,6 @@ impl PreferencesWindow {
                 "Japanese: 日本語テキストの表示テスト（コピー・ペースト・ペイン分割）".to_string();
         }
 
-        // Super キーの押下ラッチを毎フレーム更新
         ctx.input(|i| {
             for ev in &i.events {
                 if let egui::Event::Key {
@@ -166,8 +165,6 @@ impl PreferencesWindow {
             }
         });
 
-        // 設定画面が開いており、かつショートカット録画中・TextEdit入力中でない場合、
-        // 設定画面上にフォーカスやカーソルがあっても「設定を閉じる」「設定をタイトルバー化」ショートカットを受け付ける
         if self.open && self.recording_shortcut.is_none() && !ctx.egui_wants_keyboard_input() {
             let current_mods = ctx.input(|i| i.modifiers);
             let super_held = self.super_key_latched || ctx.input(detect_super_held);
@@ -213,7 +210,8 @@ impl PreferencesWindow {
             }
         }
 
-        let prefs_win_id = egui::Id::unique("custom_drag_bar_prefs_window_v2");
+        // IDを変更して、過去に伸びてしまったウィンドウサイズのメモリキャッシュをリセットする
+        let prefs_win_id = egui::Id::unique("custom_drag_bar_prefs_window_v3");
         if self.toggle_collapse_requested {
             self.toggle_collapse_requested = false;
             if !self.open {
@@ -227,102 +225,141 @@ impl PreferencesWindow {
         }
 
         let mut is_open = self.open;
+        let mut close_clicked = false;
         let mut changed = false;
         let mut font_changed = false;
         let mut lang_changed = false;
 
         if self.open {
             if let Some(inner) = egui::Window::new(
-                egui::RichText::new(tr("CustomDragBar Configuration"))
+                egui::RichText::new(tr("Termin Preferences"))
                     .size(14.5)
                     .color(egui::Color32::WHITE)
                     .strong(),
             )
-            .id(prefs_win_id)
-            .open(&mut is_open)
-            .resizable(true)
-            .collapsible(true)
-            .default_size([680.0, 480.0])
-            .min_width(480.0)
-            .min_height(320.0)
-            .show(ctx, |ui| {
-                apply_prefs_window_style(ui);
+                .id(prefs_win_id)
+                .open(&mut is_open)
+                // 横方向のみリサイズ可能、縦方向は固定して勝手に伸びるのを完全に防ぐ
+                .resizable([true, false])
+                .collapsible(true)
+                .default_size([740.0, PREFS_FIXED_HEIGHT])
+                .min_width(540.0)
+                .min_height(PREFS_FIXED_HEIGHT)
+                .max_height(PREFS_FIXED_HEIGHT)
+                .show(ctx, |ui| {
+                    apply_prefs_window_style(ui);
 
-                // Top tab bar
-                ui.horizontal_wrapped(|ui| {
-                    ui.selectable_value(
-                        &mut self.active_tab,
-                        PrefsTab::TitlebarAndFrame,
-                        egui::RichText::new(tr("Titlebar & Frame")).strong(),
-                    );
-                    ui.selectable_value(
-                        &mut self.active_tab,
-                        PrefsTab::Font,
-                        egui::RichText::new(tr("Font")).strong(),
-                    );
-                    ui.selectable_value(
-                        &mut self.active_tab,
-                        PrefsTab::Shortcuts,
-                        egui::RichText::new(tr("Shortcuts")).strong(),
-                    );
-                    ui.selectable_value(
-                        &mut self.active_tab,
-                        PrefsTab::Language,
-                        egui::RichText::new(tr("Language")).strong(),
-                    );
-                });
-                ui.add_space(6.0);
-                ui.separator();
-                ui.add_space(6.0);
+                    // 1. 固定ヘッダー（タブバー）
+                    egui::Frame::NONE
+                        .inner_margin(egui::Margin::symmetric(4, 4))
+                        .show(ui, |ui| {
+                            ui.horizontal_wrapped(|ui| {
+                                ui.spacing_mut().item_spacing.x = 6.0;
+                                terminator_tab_button(
+                                    ui,
+                                    &mut self.active_tab,
+                                    PrefsTab::TitlebarAndFrame,
+                                    &tr("Titlebar & Frame"),
+                                );
+                                terminator_tab_button(
+                                    ui,
+                                    &mut self.active_tab,
+                                    PrefsTab::Font,
+                                    &tr("Font"),
+                                );
+                                terminator_tab_button(
+                                    ui,
+                                    &mut self.active_tab,
+                                    PrefsTab::Shortcuts,
+                                    &tr("Shortcuts"),
+                                );
+                                terminator_tab_button(
+                                    ui,
+                                    &mut self.active_tab,
+                                    PrefsTab::Language,
+                                    &tr("Language"),
+                                );
+                            });
+                        });
+                    ui.separator();
 
-                // Use auto_shrink([false, false]) so the window can be freely resized vertically
-                egui::ScrollArea::vertical()
-                    .auto_shrink([false, false])
-                    .show(ui, |ui| {
-                        match self.active_tab {
-                            PrefsTab::TitlebarAndFrame => {
-                                changed |= self.render_titlebar_tab(ui, settings);
-                            }
-                            PrefsTab::Font => {
-                                if self.render_font_tab(ui, settings) {
+                    // 2. 中央スクロール領域（フッター分の高さを引いた固定高さを指定）
+                    let body_height = (ui.available_height() - FOOTER_RESERVED_HEIGHT).max(200.0);
+                    egui::Frame::NONE
+                        .inner_margin(egui::Margin::symmetric(6, 4))
+                        .show(ui, |ui| {
+                            egui::ScrollArea::vertical()
+                                .id_salt("prefs_main_scroll_area")
+                                .max_height(body_height)
+                                .auto_shrink([false, false])
+                                .show(ui, |ui| {
+                                    ui.set_min_width(ui.available_width());
+                                    match self.active_tab {
+                                        PrefsTab::TitlebarAndFrame => {
+                                            changed |= self.render_titlebar_tab(ui, settings);
+                                        }
+                                        PrefsTab::Font => {
+                                            if self.render_font_tab(ui, settings) {
+                                                changed = true;
+                                                font_changed = true;
+                                            }
+                                        }
+                                        PrefsTab::Shortcuts => {
+                                            changed |= self.render_shortcuts_tab(ui, settings);
+                                        }
+                                        PrefsTab::Language => {
+                                            if self.render_language_tab(ui, settings) {
+                                                changed = true;
+                                                lang_changed = true;
+                                            }
+                                        }
+                                    }
+                                    ui.add_space(6.0);
+                                });
+                        });
+
+                    // 3. 固定フッター（通常の top_down のまま最下部に描画）
+                    ui.separator();
+                    egui::Frame::NONE
+                        .inner_margin(egui::Margin::symmetric(4, 4))
+                        .show(ui, |ui| {
+                            ui.horizontal(|ui| {
+                                if ui.button(tr("Restore Defaults")).clicked() {
+                                    *settings = ThemeSettings::default();
+                                    self.recording_shortcut = None;
                                     changed = true;
                                     font_changed = true;
-                                }
-                            }
-                            PrefsTab::Shortcuts => {
-                                changed |= self.render_shortcuts_tab(ui, settings);
-                            }
-                            PrefsTab::Language => {
-                                if self.render_language_tab(ui, settings) {
-                                    changed = true;
                                     lang_changed = true;
                                 }
-                            }
-                        }
+                                if ui.button(tr("Save Current Layout")).clicked() {
+                                    self.save_layout_requested = true;
+                                }
+                                if ui.button(tr("Load Saved Layout")).clicked() {
+                                    self.load_layout_requested = true;
+                                }
 
-                        ui.add_space(14.0);
-                        ui.separator();
-                        ui.add_space(4.0);
-                        ui.horizontal_wrapped(|ui| {
-                            if ui.button(tr("Restore Defaults")).clicked() {
-                                *settings = ThemeSettings::default();
-                                changed = true;
-                                font_changed = true;
-                                lang_changed = true;
-                            }
-                            if ui.button(tr("Save Current Layout")).clicked() {
-                                self.save_layout_requested = true;
-                            }
-                            if ui.button(tr("Load Saved Layout")).clicked() {
-                                self.load_layout_requested = true;
-                            }
+                                ui.with_layout(
+                                    egui::Layout::right_to_left(egui::Align::Center),
+                                    |ui| {
+                                        let close_btn = egui::Button::new(
+                                            egui::RichText::new(tr("Close")).strong(),
+                                        )
+                                            .min_size(egui::vec2(96.0, 26.0));
+                                        if ui.add(close_btn).clicked() {
+                                            close_clicked = true;
+                                        }
+                                    },
+                                );
+                            });
                         });
-                    });
-            }) {
+                }) {
                 self.window_rects.push(inner.response.rect);
                 if inner.response.dragged() || inner.response.is_pointer_button_down_on() {
                     self.subwindow_dragging = true;
                 }
+            }
+            if close_clicked {
+                is_open = false;
             }
             self.open = is_open;
         }
@@ -334,15 +371,14 @@ impl PreferencesWindow {
             }
         }
 
-        // Update sub-window pointer capture state so dragging a sub-window titlebar never leaks to background panels
         let pointer_down = ctx.input(|i| i.pointer.any_down());
         let pointer_pressed = ctx.input(|i| i.pointer.any_pressed());
         let pointer_pos = ctx.input(|i| i.pointer.interact_pos().or_else(|| i.pointer.hover_pos()));
         let over_any_subwindow = pointer_pos.is_some_and(|pos| {
             self.window_rects.iter().any(|r| r.expand(6.0).contains(pos))
                 || ctx
-                    .layer_id_at(pos)
-                    .is_some_and(|l| l.order != egui::Order::Background)
+                .layer_id_at(pos)
+                .is_some_and(|l| l.order != egui::Order::Background)
         });
         if pointer_pressed && over_any_subwindow {
             self.pointer_captured_by_subwindow = true;
@@ -372,15 +408,19 @@ impl PreferencesWindow {
     fn render_titlebar_tab(&mut self, ui: &mut egui::Ui, settings: &mut ThemeSettings) -> bool {
         let mut changed = false;
 
-        ui.label(tr(
-            "Enter color codes (e.g. #2b2b2b, rgb(40,40,40)) or select using the color picker.\n\
-             Empty or invalid values automatically fallback to default colors.",
-        ));
-        ui.add_space(10.0);
+        ui.label(
+            egui::RichText::new(tr(
+                "Enter color codes (e.g. #2b2b2b, rgb(40,40,40)) or select using the color picker. Empty values fallback to default colors.",
+            ))
+                .color(egui::Color32::from_rgb(185, 190, 200)),
+        );
+        ui.add_space(8.0);
 
-        egui::Grid::new("prefscolor_grid")
-            .num_columns(4)
-            .spacing([14.0, 10.0])
+        section_heading(ui, &tr("Titlebar Colors"));
+        egui::Grid::new("prefs_titlebar_color_grid")
+            .num_columns(2)
+            .min_col_width(LABEL_COL_WIDTH)
+            .spacing([14.0, 8.0])
             .striped(true)
             .show(ui, |ui| {
                 changed |= color_row(
@@ -411,6 +451,16 @@ impl PreferencesWindow {
                     egui::Color32::from_rgb(210, 210, 210),
                     "Default (#d2d2d2)",
                 );
+            });
+
+        ui.add_space(12.0);
+        section_heading(ui, &tr("Window & Terminal Colors"));
+        egui::Grid::new("prefs_window_color_grid")
+            .num_columns(2)
+            .min_col_width(LABEL_COL_WIDTH)
+            .spacing([14.0, 8.0])
+            .striped(true)
+            .show(ui, |ui| {
                 changed |= color_row(
                     ui,
                     &tr("Window Frame BG:"),
@@ -432,14 +482,6 @@ impl PreferencesWindow {
                     egui::Color32::from_rgb(74, 74, 74),
                     "Default (#4a4a4a)",
                 );
-
-                changed |= color_row(
-                    ui,
-                    &tr("Pane Separator Color:"),
-                    &mut settings.separator_color,
-                    egui::Color32::from_rgb(74, 74, 74),
-                    "Default (#4a4a4a)",
-                );
                 changed |= color_row(
                     ui,
                     &tr("Terminal Panel BG:"),
@@ -447,51 +489,59 @@ impl PreferencesWindow {
                     egui::Color32::BLACK,
                     "Default (#000000)",
                 );
+            });
 
+        ui.add_space(12.0);
+        section_heading(ui, &tr("Appearance & Dimensions"));
+        egui::Grid::new("prefs_dimensions_grid")
+            .num_columns(2)
+            .min_col_width(LABEL_COL_WIDTH)
+            .spacing([14.0, 10.0])
+            .striped(true)
+            .show(ui, |ui| {
                 ui.label(tr("Terminal BG Opacity:"));
-                if ui
-                    .add(
-                        egui::Slider::new(&mut settings.terminal_bg_opacity, 0.0..=1.0)
-                            .step_by(0.01),
-                    )
-                    .changed()
-                {
-                    changed = true;
-                }
+                changed |= responsive_slider_f32(
+                    ui,
+                    &mut settings.terminal_bg_opacity,
+                    0.0..=1.0,
+                    0.05,
+                    2,
+                    "",
+                );
                 ui.end_row();
 
                 ui.label(tr("Pane Separator Width (px):"));
-                if ui
-                    .add(egui::Slider::new(&mut settings.separator_width, 1.0..=16.0).step_by(1.0))
-                    .changed()
-                {
-                    changed = true;
-                }
+                changed |= responsive_slider_f32(
+                    ui,
+                    &mut settings.separator_width,
+                    1.0..=16.0,
+                    1.0,
+                    0,
+                    " px",
+                );
                 ui.end_row();
 
                 ui.label(tr("Window Border Width (px):"));
-                if ui
-                    .add(
-                        egui::Slider::new(&mut settings.frame_border_width, 1.0..=20.0)
-                            .step_by(1.0),
-                    )
-                    .changed()
-                {
-                    changed = true;
-                }
+                changed |= responsive_slider_f32(
+                    ui,
+                    &mut settings.frame_border_width,
+                    1.0..=20.0,
+                    1.0,
+                    0,
+                    " px",
+                );
                 ui.end_row();
 
                 ui.label(tr("Target FPS:"));
-                if ui
-                    .add(
-                        egui::Slider::new(&mut settings.target_fps, 1..=240)
-                            .suffix(" FPS"),
-                    )
-                    .changed()
-                {
-                    changed = true;
-                }
-                ui.end_row();            });
+                changed |= responsive_slider_u32(
+                    ui,
+                    &mut settings.target_fps,
+                    1..=240,
+                    5,
+                    " FPS",
+                );
+                ui.end_row();
+            });
 
         changed
     }
@@ -499,21 +549,28 @@ impl PreferencesWindow {
     fn render_font_tab(&mut self, ui: &mut egui::Ui, settings: &mut ThemeSettings) -> bool {
         let mut changed = false;
 
-        ui.label(tr(
-            "Select a font installed on your Debian system or enter a custom font file path (.ttf / .otf / .ttc).",
-        ));
-        ui.add_space(10.0);
+        ui.label(
+            egui::RichText::new(tr(
+                "Select a font installed on your Debian system or enter a custom font file path (.ttf / .otf / .ttc).",
+            ))
+                .color(egui::Color32::from_rgb(185, 190, 200)),
+        );
+        ui.add_space(8.0);
 
+        section_heading(ui, &tr("Font Selection"));
         egui::Grid::new("prefs_font_grid")
             .num_columns(2)
-            .spacing([14.0, 12.0])
+            .min_col_width(LABEL_COL_WIDTH)
+            .spacing([14.0, 10.0])
             .striped(true)
             .show(ui, |ui| {
                 ui.label(tr("Filter System Fonts:"));
                 ui.horizontal(|ui| {
+                    let avail = ui.available_width();
+                    let filter_w = (avail - 285.0).max(120.0);
                     ui.add(
                         egui::TextEdit::singleline(&mut self.font_filter)
-                            .desired_width(240.0)
+                            .desired_width(filter_w)
                             .hint_text(tr("Type to filter (e.g. noto, mono, vl)...")),
                     );
                     if ui.button(tr("Rescan")).clicked() {
@@ -521,7 +578,10 @@ impl PreferencesWindow {
                     }
                     if ui
                         .button(
-                            egui::RichText::new(format!("🗚 {}", tr("Open Font Sample Catalog...")))
+                            egui::RichText::new(format!(
+                                "🗚 {}",
+                                tr("Open Font Sample Catalog...")
+                            ))
                                 .strong(),
                         )
                         .clicked()
@@ -539,9 +599,10 @@ impl PreferencesWindow {
                     .unwrap_or(&default_font_label);
 
                 let filter_lower = self.font_filter.to_lowercase();
+                let combo_w = ui.available_width().max(180.0);
                 egui::ComboBox::from_id_salt("debian_system_font_combo")
                     .selected_text(current_name)
-                    .width(360.0)
+                    .width(combo_w)
                     .show_ui(ui, |ui| {
                         for (name, path) in &self.available_fonts {
                             if !filter_lower.is_empty()
@@ -560,32 +621,12 @@ impl PreferencesWindow {
                 ui.end_row();
 
                 ui.label(tr("Font File Path:"));
+                let path_w = ui.available_width().max(180.0);
                 if ui
                     .add(
                         egui::TextEdit::singleline(&mut settings.font_path)
-                            .desired_width(360.0)
+                            .desired_width(path_w)
                             .hint_text("/usr/share/fonts/..."),
-                    )
-                    .changed()
-                {
-                    changed = true;
-                }
-                ui.end_row();
-
-                ui.label(tr("UI & Menu Font Size (px):"));
-                if ui
-                    .add(egui::Slider::new(&mut settings.ui_font_size, 9.0..=28.0).step_by(0.5))
-                    .changed()
-                {
-                    changed = true;
-                }
-                ui.end_row();
-
-                ui.label(tr("Terminal Font Size (px):"));
-                if ui
-                    .add(
-                        egui::Slider::new(&mut settings.terminal_font_size, 8.0..=36.0)
-                            .step_by(0.5),
                     )
                     .changed()
                 {
@@ -595,11 +636,60 @@ impl PreferencesWindow {
             });
 
         ui.add_space(12.0);
-        ui.group(|ui| {
-            ui.label(egui::RichText::new(tr("Preview:")).strong());
-            ui.label("ASCII: ABCDEFGHIJKLMNOPQRSTUVWXYZ 0123456789 !@#$%^&*()");
-            ui.label("Japanese: 日本語テキストの表示テスト（コピー・ペースト・ペイン分割）");
-        });
+        section_heading(ui, &tr("Font Sizes"));
+        egui::Grid::new("prefs_font_size_grid")
+            .num_columns(2)
+            .min_col_width(LABEL_COL_WIDTH)
+            .spacing([14.0, 10.0])
+            .striped(true)
+            .show(ui, |ui| {
+                ui.label(tr("UI & Menu Font Size (px):"));
+                changed |= responsive_slider_f32(
+                    ui,
+                    &mut settings.ui_font_size,
+                    9.0..=28.0,
+                    0.5,
+                    1,
+                    " px",
+                );
+                ui.end_row();
+
+                ui.label(tr("Terminal Font Size (px):"));
+                changed |= responsive_slider_f32(
+                    ui,
+                    &mut settings.terminal_font_size,
+                    8.0..=36.0,
+                    0.5,
+                    1,
+                    " px",
+                );
+                ui.end_row();
+            });
+
+        ui.add_space(12.0);
+        section_heading(ui, &tr("Preview"));
+        egui::Frame::new()
+            .fill(egui::Color32::from_rgb(20, 22, 27))
+            .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(70, 75, 88)))
+            .inner_margin(egui::Margin::same(10))
+            .corner_radius(4.0)
+            .show(ui, |ui| {
+                ui.set_min_width(ui.available_width());
+                let term_size = settings.effective_terminal_font_size();
+                ui.label(
+                    egui::RichText::new(
+                        "ASCII: ABCDEFGHIJKLMNOPQRSTUVWXYZ 0123456789 !@#$%^&*()",
+                    )
+                        .font(egui::FontId::monospace(term_size)),
+                );
+                ui.add_space(4.0);
+                ui.label(
+                    egui::RichText::new(
+                        "Japanese: 日本語テキストの表示テスト（コピー・ペースト・ペイン分割）",
+                    )
+                        .font(egui::FontId::monospace(term_size)),
+                );
+            });
 
         changed
     }
@@ -611,6 +701,7 @@ impl PreferencesWindow {
     ) -> bool {
         let mut changed = false;
         let mut is_open = self.font_sample_window_open;
+        let mut close_clicked = false;
         let mut newly_loaded_preview = false;
         let mut loads_this_frame = 0usize;
         let mut pending_more_loads = false;
@@ -621,242 +712,271 @@ impl PreferencesWindow {
                 .color(egui::Color32::WHITE)
                 .strong(),
         )
-        .id(egui::Id::unique("system_font_sample_catalog_window_v2"))
-        .open(&mut is_open)
-        .resizable(true)
-        .collapsible(true)
-        .default_size([720.0, 500.0])
-        .min_width(500.0)
-        .min_height(340.0)
-        .show(ctx, |ui| {
-            apply_prefs_window_style(ui);
+            .id(egui::Id::unique("system_font_sample_catalog_window_v3"))
+            .open(&mut is_open)
+            .resizable([true, false])
+            .collapsible(true)
+            .default_size([740.0, SAMPLE_FIXED_HEIGHT])
+            .min_width(520.0)
+            .min_height(SAMPLE_FIXED_HEIGHT)
+            .max_height(SAMPLE_FIXED_HEIGHT)
+            .show(ctx, |ui| {
+                apply_prefs_window_style(ui);
 
-            ui.label(tr(
-                "Browse installed system fonts with live text samples and click 'Use This Font' to apply.",
-            ));
-            ui.add_space(6.0);
+                egui::Frame::NONE
+                    .inner_margin(egui::Margin::symmetric(4, 4))
+                    .show(ui, |ui| {
+                        ui.label(tr(
+                            "Browse installed system fonts with live text samples and click 'Use This Font' to apply.",
+                        ));
+                        ui.add_space(6.0);
 
-            ui.horizontal_wrapped(|ui| {
-                ui.label(tr("Category:"));
-                ui.selectable_value(
-                    &mut self.sample_category,
-                    FontCategoryFilter::All,
-                    tr("All Fonts"),
-                );
-                ui.selectable_value(
-                    &mut self.sample_category,
-                    FontCategoryFilter::Monospace,
-                    tr("Monospace"),
-                );
-                ui.selectable_value(
-                    &mut self.sample_category,
-                    FontCategoryFilter::JapaneseCjk,
-                    tr("Japanese / CJK"),
-                );
-            });
+                        ui.horizontal_wrapped(|ui| {
+                            ui.label(tr("Category:"));
+                            ui.selectable_value(
+                                &mut self.sample_category,
+                                FontCategoryFilter::All,
+                                tr("All Fonts"),
+                            );
+                            ui.selectable_value(
+                                &mut self.sample_category,
+                                FontCategoryFilter::Monospace,
+                                tr("Monospace"),
+                            );
+                            ui.selectable_value(
+                                &mut self.sample_category,
+                                FontCategoryFilter::JapaneseCjk,
+                                tr("Japanese / CJK"),
+                            );
+                        });
 
-            ui.horizontal(|ui| {
-                ui.label(tr("Filter System Fonts:"));
-                ui.add(
-                    egui::TextEdit::singleline(&mut self.sample_filter)
-                        .desired_width(240.0)
-                        .hint_text(tr("Type to filter (e.g. noto, mono, vl, gothic)...")),
-                );
-                if ui.button(tr("Rescan")).clicked() {
-                    self.available_fonts = discover_system_fonts();
-                }
-            });
-
-            ui.horizontal(|ui| {
-                ui.label(tr("Sample Text:"));
-                ui.add(
-                    egui::TextEdit::singleline(&mut self.sample_text_ascii).desired_width(260.0),
-                );
-                ui.add(
-                    egui::TextEdit::singleline(&mut self.sample_text_cjk).desired_width(260.0),
-                );
-            });
-
-            ui.add_space(6.0);
-            ui.separator();
-            ui.add_space(4.0);
-
-            let filter_lower = self.sample_filter.to_lowercase();
-            let filtered_fonts: Vec<(String, String)> = self
-                .available_fonts
-                .iter()
-                .filter(|(name, path)| {
-                    let cat_ok = match self.sample_category {
-                        FontCategoryFilter::All => true,
-                        FontCategoryFilter::Monospace => is_monospace_font(name, path),
-                        FontCategoryFilter::JapaneseCjk => is_cjk_font(name, path),
-                    };
-                    cat_ok
-                        && (filter_lower.is_empty()
-                            || name.to_lowercase().contains(&filter_lower)
-                            || path.to_lowercase().contains(&filter_lower))
-                })
-                .cloned()
-                .collect();
-
-            ui.label(format!(
-                "{}: {} / {}",
-                tr("Matching Fonts"),
-                filtered_fonts.len(),
-                self.available_fonts.len()
-            ));
-            ui.add_space(4.0);
-
-            let row_height = 88.0;
-            egui::ScrollArea::vertical()
-                .auto_shrink([false, false])
-                .show_rows(ui, row_height, filtered_fonts.len(), |ui, row_range| {
-                    let visible_paths: Vec<String> = row_range
-                        .clone()
-                        .map(|i| filtered_fonts[i].1.clone())
-                        .collect();
-
-                    for idx in row_range {
-                        let (name, path) = &filtered_fonts[idx];
-                        let is_selected = &settings.font_path == path;
-
-                        // Lazily load font data for visible rows so each sample renders in its own typeface.
-                        // Note: `ctx.set_fonts` only takes effect at the start of the NEXT pass, so we also
-                        // verify below that the font family is bound in `ui.ctx().fonts` before using it.
-                        let fam_key = if let Some((key, _)) = self.loaded_preview_fonts.get(path) {
-                            Some(key.clone())
-                        } else if self.skipped_preview_fonts.contains(path) {
-                            None
-                        } else if loads_this_frame < 6 {
-                            loads_this_frame += 1;
-                            let is_reasonable_size = fs::metadata(path)
-                                .map(|m| m.len() <= 35 * 1024 * 1024)
-                                .unwrap_or(false);
-                            let loaded_bytes = if is_reasonable_size {
-                                fs::read(path).ok().filter(|b| is_valid_font_bytes(b))
-                            } else {
-                                None
-                            };
-                            if let Some(bytes) = loaded_bytes {
-                                if self.loaded_preview_fonts.len() >= 96 {
-                                    self.loaded_preview_fonts
-                                        .retain(|k, _| visible_paths.contains(k));
-                                }
-                                self.next_preview_font_id += 1;
-                                let key = format!("sample_font_{}", self.next_preview_font_id);
-                                self.loaded_preview_fonts.insert(
-                                    path.clone(),
-                                    (
-                                        key.clone(),
-                                        Arc::new(egui::FontData::from_owned(bytes)),
-                                    ),
-                                );
-                                newly_loaded_preview = true;
-                                Some(key)
-                            } else {
-                                self.skipped_preview_fonts.insert(path.clone());
-                                None
+                        ui.horizontal(|ui| {
+                            ui.label(tr("Filter System Fonts:"));
+                            let filter_w = (ui.available_width() - 90.0).max(140.0);
+                            ui.add(
+                                egui::TextEdit::singleline(&mut self.sample_filter)
+                                    .desired_width(filter_w)
+                                    .hint_text(tr("Type to filter (e.g. noto, mono, vl, gothic)...")),
+                            );
+                            if ui.button(tr("Rescan")).clicked() {
+                                self.available_fonts = discover_system_fonts();
                             }
-                        } else {
-                            pending_more_loads = true;
-                            None
-                        };
+                        });
 
-                        let card_fill = if is_selected {
-                            egui::Color32::from_rgb(35, 55, 42)
-                        } else {
-                            egui::Color32::from_rgb(30, 30, 34)
-                        };
-                        let card_stroke = if is_selected {
-                            egui::Stroke::new(1.5, egui::Color32::from_rgb(74, 222, 128))
-                        } else {
-                            egui::Stroke::new(1.0, egui::Color32::from_rgb(65, 65, 72))
-                        };
+                        ui.horizontal(|ui| {
+                            ui.label(tr("Sample Text:"));
+                            let half_w = ((ui.available_width() - 12.0) * 0.5).max(120.0);
+                            ui.add(
+                                egui::TextEdit::singleline(&mut self.sample_text_ascii)
+                                    .desired_width(half_w),
+                            );
+                            ui.add(
+                                egui::TextEdit::singleline(&mut self.sample_text_cjk)
+                                    .desired_width(ui.available_width().max(120.0)),
+                            );
+                        });
 
-                        egui::Frame::new()
-                            .fill(card_fill)
-                            .stroke(card_stroke)
-                            .inner_margin(egui::Margin::same(6))
-                            .corner_radius(4.0)
-                            .show(ui, |ui| {
-                                ui.set_min_width(ui.available_width());
-                                ui.horizontal(|ui| {
-                                    ui.label(
-                                        egui::RichText::new(name)
-                                            .size(13.5)
-                                            .strong()
-                                            .color(egui::Color32::WHITE),
-                                    );
-                                    if is_monospace_font(name, path) {
-                                        ui.colored_label(
-                                            egui::Color32::from_rgb(96, 165, 250),
-                                            "[Mono]",
-                                        );
-                                    }
-                                    if is_cjk_font(name, path) {
-                                        ui.colored_label(
-                                            egui::Color32::from_rgb(250, 204, 21),
-                                            "[CJK]",
-                                        );
-                                    }
-                                    ui.label(
-                                        egui::RichText::new(path)
-                                            .size(11.0)
-                                            .color(egui::Color32::from_rgb(160, 165, 175)),
-                                    );
-                                    ui.with_layout(
-                                        egui::Layout::right_to_left(egui::Align::Center),
-                                        |ui| {
-                                            if is_selected {
-                                                ui.colored_label(
-                                                    egui::Color32::from_rgb(74, 222, 128),
-                                                    format!("✔ {}", tr("Selected")),
-                                                );
-                                            } else if ui.button(tr("Use This Font")).clicked() {
-                                                settings.font_path = path.clone();
-                                                changed = true;
-                                            }
-                                        },
-                                    );
-                                });
-
-                                let sample_font_id = match &fam_key {
-                                    Some(k) => {
-                                        let family = egui::FontFamily::Name(k.clone().into());
-                                        let is_bound = ui.ctx().fonts(|f| {
-                                            let defs = f.definitions();
-                                            defs.families.get(&family).is_some_and(|list| {
-                                                !list.is_empty()
-                                                    && list
-                                                        .iter()
-                                                        .all(|n| defs.font_data.contains_key(n))
-                                            })
-                                        });
-                                        if is_bound {
-                                            egui::FontId::new(14.5, family)
-                                        } else {
-                                            newly_loaded_preview = true;
-                                            egui::FontId::monospace(14.5)
-                                        }
-                                    }
-                                    None => egui::FontId::monospace(14.5),
-                                };
-
-                                ui.label(
-                                    egui::RichText::new(&self.sample_text_ascii)
-                                        .font(sample_font_id.clone())
-                                        .color(egui::Color32::from_rgb(230, 230, 235)),
-                                );
-                                ui.label(
-                                    egui::RichText::new(&self.sample_text_cjk)
-                                        .font(sample_font_id)
-                                        .color(egui::Color32::from_rgb(210, 220, 230)),
-                                );
-                            });
                         ui.add_space(4.0);
-                    }
-                });
-        }) {
+                        ui.separator();
+                        ui.add_space(4.0);
+
+                        let filter_lower = self.sample_filter.to_lowercase();
+                        let filtered_fonts: Vec<(String, String)> = self
+                            .available_fonts
+                            .iter()
+                            .filter(|(name, path)| {
+                                let cat_ok = match self.sample_category {
+                                    FontCategoryFilter::All => true,
+                                    FontCategoryFilter::Monospace => is_monospace_font(name, path),
+                                    FontCategoryFilter::JapaneseCjk => is_cjk_font(name, path),
+                                };
+                                cat_ok
+                                    && (filter_lower.is_empty()
+                                    || name.to_lowercase().contains(&filter_lower)
+                                    || path.to_lowercase().contains(&filter_lower))
+                            })
+                            .cloned()
+                            .collect();
+
+                        ui.label(format!(
+                            "{}: {} / {}",
+                            tr("Matching Fonts"),
+                            filtered_fonts.len(),
+                            self.available_fonts.len()
+                        ));
+                        ui.add_space(4.0);
+
+                        let list_height = (ui.available_height() - FOOTER_RESERVED_HEIGHT).max(160.0);
+                        let row_height = 88.0;
+                        egui::ScrollArea::vertical()
+                            .id_salt("font_sample_scroll_area")
+                            .max_height(list_height)
+                            .auto_shrink([false, false])
+                            .show_rows(ui, row_height, filtered_fonts.len(), |ui, row_range| {
+                                let visible_paths: Vec<String> = row_range
+                                    .clone()
+                                    .map(|i| filtered_fonts[i].1.clone())
+                                    .collect();
+
+                                for idx in row_range {
+                                    let (name, path) = &filtered_fonts[idx];
+                                    let is_selected = &settings.font_path == path;
+
+                                    let fam_key =
+                                        if let Some((key, _)) = self.loaded_preview_fonts.get(path) {
+                                            Some(key.clone())
+                                        } else if self.skipped_preview_fonts.contains(path) {
+                                            None
+                                        } else if loads_this_frame < 6 {
+                                            loads_this_frame += 1;
+                                            let is_reasonable_size = fs::metadata(path)
+                                                .map(|m| m.len() <= 35 * 1024 * 1024)
+                                                .unwrap_or(false);
+                                            let loaded_bytes = if is_reasonable_size {
+                                                fs::read(path).ok().filter(|b| is_valid_font_bytes(b))
+                                            } else {
+                                                None
+                                            };
+                                            if let Some(bytes) = loaded_bytes {
+                                                if self.loaded_preview_fonts.len() >= 96 {
+                                                    self.loaded_preview_fonts
+                                                        .retain(|k, _| visible_paths.contains(k));
+                                                }
+                                                self.next_preview_font_id += 1;
+                                                let key =
+                                                    format!("sample_font_{}", self.next_preview_font_id);
+                                                self.loaded_preview_fonts.insert(
+                                                    path.clone(),
+                                                    (
+                                                        key.clone(),
+                                                        Arc::new(egui::FontData::from_owned(bytes)),
+                                                    ),
+                                                );
+                                                newly_loaded_preview = true;
+                                                Some(key)
+                                            } else {
+                                                self.skipped_preview_fonts.insert(path.clone());
+                                                None
+                                            }
+                                        } else {
+                                            pending_more_loads = true;
+                                            None
+                                        };
+
+                                    let card_fill = if is_selected {
+                                        egui::Color32::from_rgb(35, 55, 42)
+                                    } else {
+                                        egui::Color32::from_rgb(30, 30, 34)
+                                    };
+                                    let card_stroke = if is_selected {
+                                        egui::Stroke::new(1.5, egui::Color32::from_rgb(74, 222, 128))
+                                    } else {
+                                        egui::Stroke::new(1.0, egui::Color32::from_rgb(65, 65, 72))
+                                    };
+
+                                    egui::Frame::new()
+                                        .fill(card_fill)
+                                        .stroke(card_stroke)
+                                        .inner_margin(egui::Margin::same(6))
+                                        .corner_radius(4.0)
+                                        .show(ui, |ui| {
+                                            ui.set_min_width(ui.available_width());
+                                            ui.horizontal(|ui| {
+                                                ui.label(
+                                                    egui::RichText::new(name)
+                                                        .size(13.5)
+                                                        .strong()
+                                                        .color(egui::Color32::WHITE),
+                                                );
+                                                if is_monospace_font(name, path) {
+                                                    ui.colored_label(
+                                                        egui::Color32::from_rgb(96, 165, 250),
+                                                        "[Mono]",
+                                                    );
+                                                }
+                                                if is_cjk_font(name, path) {
+                                                    ui.colored_label(
+                                                        egui::Color32::from_rgb(250, 204, 21),
+                                                        "[CJK]",
+                                                    );
+                                                }
+                                                ui.label(
+                                                    egui::RichText::new(path)
+                                                        .size(11.0)
+                                                        .color(egui::Color32::from_rgb(160, 165, 175)),
+                                                );
+                                                ui.with_layout(
+                                                    egui::Layout::right_to_left(egui::Align::Center),
+                                                    |ui| {
+                                                        if is_selected {
+                                                            ui.colored_label(
+                                                                egui::Color32::from_rgb(74, 222, 128),
+                                                                format!("✔ {}", tr("Selected")),
+                                                            );
+                                                        } else if ui
+                                                            .button(tr("Use This Font"))
+                                                            .clicked()
+                                                        {
+                                                            settings.font_path = path.clone();
+                                                            changed = true;
+                                                        }
+                                                    },
+                                                );
+                                            });
+
+                                            let sample_font_id = match &fam_key {
+                                                Some(k) => {
+                                                    let family =
+                                                        egui::FontFamily::Name(k.clone().into());
+                                                    let is_bound = ui.ctx().fonts(|f| {
+                                                        let defs = f.definitions();
+                                                        defs.families.get(&family).is_some_and(|list| {
+                                                            !list.is_empty()
+                                                                && list.iter().all(|n| {
+                                                                defs.font_data.contains_key(n)
+                                                            })
+                                                        })
+                                                    });
+                                                    if is_bound {
+                                                        egui::FontId::new(14.5, family)
+                                                    } else {
+                                                        newly_loaded_preview = true;
+                                                        egui::FontId::monospace(14.5)
+                                                    }
+                                                }
+                                                None => egui::FontId::monospace(14.5),
+                                            };
+
+                                            ui.label(
+                                                egui::RichText::new(&self.sample_text_ascii)
+                                                    .font(sample_font_id.clone())
+                                                    .color(egui::Color32::from_rgb(230, 230, 235)),
+                                            );
+                                            ui.label(
+                                                egui::RichText::new(&self.sample_text_cjk)
+                                                    .font(sample_font_id)
+                                                    .color(egui::Color32::from_rgb(210, 220, 230)),
+                                            );
+                                        });
+                                    ui.add_space(4.0);
+                                }
+                            });
+                    });
+
+                ui.separator();
+                egui::Frame::NONE
+                    .inner_margin(egui::Margin::symmetric(4, 4))
+                    .show(ui, |ui| {
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            let close_btn =
+                                egui::Button::new(egui::RichText::new(tr("Close")).strong())
+                                    .min_size(egui::vec2(96.0, 26.0));
+                            if ui.add(close_btn).clicked() {
+                                close_clicked = true;
+                            }
+                        });
+                    });
+            }) {
             self.window_rects.push(inner.response.rect);
             if inner.response.dragged() || inner.response.is_pointer_button_down_on() {
                 self.subwindow_dragging = true;
@@ -872,6 +992,9 @@ impl PreferencesWindow {
             ctx.request_repaint();
         }
 
+        if close_clicked {
+            is_open = false;
+        }
         self.font_sample_window_open = is_open;
         changed
     }
@@ -879,14 +1002,23 @@ impl PreferencesWindow {
     fn render_shortcuts_tab(&mut self, ui: &mut egui::Ui, settings: &mut ThemeSettings) -> bool {
         let mut changed = false;
 
-        ui.label(tr(
-            "Configure keyboard shortcuts for terminal and workspace actions.\n\
-             Multiple shortcuts can be separated by '/' or ',' (e.g. Super+C / Ctrl+Shift+C).\n\
-             Use 'Record' to replace or '+ Add' to append another shortcut.",
-        ));
-        ui.add_space(10.0);
+        ui.horizontal_wrapped(|ui| {
+            ui.label(
+                egui::RichText::new(tr(
+                    "Configure keyboard shortcuts. Click '+ Add' to add another shortcut field, or 'Record' to replace a specific binding.",
+                ))
+                    .color(egui::Color32::from_rgb(185, 190, 200)),
+            );
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui.button(tr("Reset Shortcuts to Defaults")).clicked() {
+                    settings.shortcuts = ShortcutSettings::default();
+                    self.recording_shortcut = None;
+                    changed = true;
+                }
+            });
+        });
+        ui.add_space(8.0);
 
-        // Super キーの押下ラッチ更新（Wayland/X11 で Key::SuperLeft の押しっぱなし状態が modifiers に乗らない環境対策）
         ui.input(|i| {
             for ev in &i.events {
                 if let egui::Event::Key {
@@ -911,12 +1043,9 @@ impl PreferencesWindow {
             }
         });
 
-        // If recording is active, capture the next non-modifier key press
         let mut recorded_binding: Option<(&'static str, RecordMode, String)> = None;
         let mut cancel_recording = false;
         if let Some((target_field, mode)) = self.recording_shortcut {
-            // 録画中は TextEdit にフォーカスがあると Event::Text("c") で中身が "c" に書き換えられてしまうため、
-            // 全てのウィジェットからフォーカスを強制解除する
             if let Some(focused_id) = ui.ctx().memory(|m| m.focused()) {
                 ui.ctx().memory_mut(|m| m.surrender_focus(focused_id));
             }
@@ -949,7 +1078,6 @@ impl PreferencesWindow {
                             cancel_recording = true;
                             break;
                         }
-                        // 修飾キー（Ctrl / Shift / Alt / Super）単体が押された段階では絶対に確定させない
                         if is_modifier_only_key(key)
                             || physical_key.is_some_and(is_modifier_only_key)
                         {
@@ -1008,9 +1136,11 @@ impl PreferencesWindow {
 
         let defaults = ShortcutSettings::default();
 
+        section_heading(ui, &tr("Keybindings"));
         egui::Grid::new("prefs_shortcuts_grid")
-            .num_columns(5)
-            .spacing([10.0, 10.0])
+            .num_columns(2)
+            .min_col_width(LABEL_COL_WIDTH)
+            .spacing([14.0, 10.0])
             .striped(true)
             .show(ui, |ui| {
                 changed |= shortcut_row(
@@ -1085,7 +1215,6 @@ impl PreferencesWindow {
                     &mut self.recording_shortcut,
                     &recorded_binding,
                 );
-
                 changed |= shortcut_row(
                     ui,
                     "open_preferences",
@@ -1151,29 +1280,27 @@ impl PreferencesWindow {
                 );
             });
 
-        ui.add_space(10.0);
-        if ui.button(tr("Reset Shortcuts to Defaults")).clicked() {
-            settings.shortcuts = ShortcutSettings::default();
-            self.recording_shortcut = None;
-            changed = true;
-        }
-
         changed
     }
 
     fn render_language_tab(&mut self, ui: &mut egui::Ui, settings: &mut ThemeSettings) -> bool {
         let mut changed = false;
 
-        ui.label(tr(
-            "Select UI language or load a custom GNU gettext (.po) translation file.",
-        ));
-        ui.add_space(10.0);
+        ui.label(
+            egui::RichText::new(tr(
+                "Select UI language or load a custom GNU gettext (.po) translation file.",
+            ))
+                .color(egui::Color32::from_rgb(185, 190, 200)),
+        );
+        ui.add_space(8.0);
 
         let discovered_po = discover_po_files();
         let (active_locale, entry_count) = active_catalog_info();
 
+        section_heading(ui, &tr("Localization"));
         egui::Grid::new("prefs_lang_grid")
             .num_columns(2)
+            .min_col_width(LABEL_COL_WIDTH)
             .spacing([14.0, 12.0])
             .striped(true)
             .show(ui, |ui| {
@@ -1185,9 +1312,10 @@ impl PreferencesWindow {
                     other => format!("{}.po", other),
                 };
 
+                let combo_w = ui.available_width().max(200.0);
                 egui::ComboBox::from_id_salt("language_po_combo")
                     .selected_text(selected_label)
-                    .width(280.0)
+                    .width(combo_w)
                     .show_ui(ui, |ui| {
                         if ui
                             .selectable_value(
@@ -1240,10 +1368,12 @@ impl PreferencesWindow {
 
                 ui.label(tr("Custom .po File Path:"));
                 ui.horizontal(|ui| {
+                    let avail = ui.available_width();
+                    let text_w = (avail - 135.0).max(140.0);
                     if ui
                         .add(
                             egui::TextEdit::singleline(&mut settings.custom_po_path)
-                                .desired_width(260.0)
+                                .desired_width(text_w)
                                 .hint_text("po/ja.po"),
                         )
                         .changed()
@@ -1263,6 +1393,166 @@ impl PreferencesWindow {
 
         changed
     }
+}
+
+fn terminator_tab_button(
+    ui: &mut egui::Ui,
+    active_tab: &mut PrefsTab,
+    tab_val: PrefsTab,
+    label: &str,
+) {
+    let selected = *active_tab == tab_val;
+    let text_color = if selected {
+        egui::Color32::WHITE
+    } else {
+        egui::Color32::from_rgb(175, 180, 190)
+    };
+    let btn = egui::Button::new(egui::RichText::new(label).color(text_color).strong())
+        .fill(if selected {
+            egui::Color32::from_rgb(48, 54, 66)
+        } else {
+            egui::Color32::TRANSPARENT
+        })
+        .stroke(egui::Stroke::NONE)
+        .min_size(egui::vec2(110.0, 30.0));
+
+    let resp = ui.add(btn);
+    if selected {
+        let underline_rect = egui::Rect::from_min_max(
+            egui::pos2(resp.rect.min.x + 4.0, resp.rect.max.y - 2.5),
+            egui::pos2(resp.rect.max.x - 4.0, resp.rect.max.y),
+        );
+        ui.painter().rect_filled(
+            underline_rect,
+            1.0,
+            egui::Color32::from_rgb(59, 130, 246),
+        );
+    }
+    if resp.clicked() {
+        *active_tab = tab_val;
+    }
+}
+
+fn section_heading(ui: &mut egui::Ui, title: &str) {
+    ui.add_space(2.0);
+    ui.label(
+        egui::RichText::new(title)
+            .strong()
+            .color(egui::Color32::WHITE),
+    );
+    ui.add_space(2.0);
+}
+
+fn responsive_slider_f32(
+    ui: &mut egui::Ui,
+    value: &mut f32,
+    range: std::ops::RangeInclusive<f32>,
+    step: f32,
+    decimals: usize,
+    suffix: &str,
+) -> bool {
+    let mut changed = false;
+    let min_val = *range.start();
+    let max_val = *range.end();
+
+    ui.horizontal(|ui| {
+        let avail = ui.available_width();
+        let reserved_for_controls = 155.0;
+        ui.spacing_mut().slider_width = (avail - reserved_for_controls).max(80.0);
+
+        let slider = egui::Slider::new(value, range)
+            .step_by(step as f64)
+            .fixed_decimals(decimals)
+            .suffix(suffix);
+        if ui.add(slider).changed() {
+            changed = true;
+        }
+
+        if ui
+            .add_enabled(
+                *value > min_val,
+                egui::Button::new(" − ").min_size(egui::vec2(26.0, 22.0)),
+            )
+            .on_hover_text(tr("Decrease value"))
+            .clicked()
+        {
+            let next = (*value - step).clamp(min_val, max_val);
+            *value = if step > 0.0 {
+                ((next / step).round() * step).clamp(min_val, max_val)
+            } else {
+                next
+            };
+            changed = true;
+        }
+
+        if ui
+            .add_enabled(
+                *value < max_val,
+                egui::Button::new(" + ").min_size(egui::vec2(26.0, 22.0)),
+            )
+            .on_hover_text(tr("Increase value"))
+            .clicked()
+        {
+            let next = (*value + step).clamp(min_val, max_val);
+            *value = if step > 0.0 {
+                ((next / step).round() * step).clamp(min_val, max_val)
+            } else {
+                next
+            };
+            changed = true;
+        }
+    });
+
+    changed
+}
+
+fn responsive_slider_u32(
+    ui: &mut egui::Ui,
+    value: &mut u32,
+    range: std::ops::RangeInclusive<u32>,
+    button_step: u32,
+    suffix: &str,
+) -> bool {
+    let mut changed = false;
+    let min_val = *range.start();
+    let max_val = *range.end();
+
+    ui.horizontal(|ui| {
+        let avail = ui.available_width();
+        let reserved_for_controls = 155.0;
+        ui.spacing_mut().slider_width = (avail - reserved_for_controls).max(80.0);
+
+        let slider = egui::Slider::new(value, range).suffix(suffix);
+        if ui.add(slider).changed() {
+            changed = true;
+        }
+
+        if ui
+            .add_enabled(
+                *value > min_val,
+                egui::Button::new(" − ").min_size(egui::vec2(26.0, 22.0)),
+            )
+            .on_hover_text(tr("Decrease value"))
+            .clicked()
+        {
+            *value = value.saturating_sub(button_step).clamp(min_val, max_val);
+            changed = true;
+        }
+
+        if ui
+            .add_enabled(
+                *value < max_val,
+                egui::Button::new(" + ").min_size(egui::vec2(26.0, 22.0)),
+            )
+            .on_hover_text(tr("Increase value"))
+            .clicked()
+        {
+            *value = value.saturating_add(button_step).clamp(min_val, max_val);
+            changed = true;
+        }
+    });
+
+    changed
 }
 
 fn apply_prefs_window_style(ui: &mut egui::Ui) {
@@ -1320,11 +1610,32 @@ fn shortcut_row(
     recorded_binding: &Option<(&'static str, RecordMode, String)>,
 ) -> bool {
     let mut changed = false;
+    let rec_idx_key = egui::Id::unique(format!("shortcut_rec_target_idx_{}", field_id));
+    let mut target_idx: usize = ui
+        .ctx()
+        .data_mut(|d| d.get_temp::<usize>(rec_idx_key))
+        .unwrap_or(0);
+
+    let mut bindings = split_shortcut_bindings(value);
+    if bindings.is_empty() {
+        bindings.push(String::new());
+    }
+
     if let Some((rec_id, mode, new_sc)) = recorded_binding {
         if *rec_id == field_id {
             match mode {
                 RecordMode::Replace => {
-                    *value = new_sc.clone();
+                    if target_idx < bindings.len() {
+                        bindings[target_idx] = new_sc.clone();
+                    } else {
+                        bindings.push(new_sc.clone());
+                    }
+                    let cleaned: Vec<String> = bindings
+                        .into_iter()
+                        .map(|s| s.trim().to_string())
+                        .filter(|s| !s.is_empty())
+                        .collect();
+                    *value = cleaned.join(" / ");
                 }
                 RecordMode::Append => {
                     let mut existing = split_shortcut_bindings(value);
@@ -1336,6 +1647,10 @@ fn shortcut_row(
             }
             *recording_shortcut = None;
             changed = true;
+            bindings = split_shortcut_bindings(value);
+            if bindings.is_empty() {
+                bindings.push(String::new());
+            }
         }
     }
 
@@ -1345,60 +1660,140 @@ fn shortcut_row(
 
     ui.label(label);
 
-    // 録画中に TextEdit が Event::Text("c") 等を受け取って値を "c" で上書きしてしまうのを防ぐため interactive(!any_recording_this) にする
-    let resp = ui.add(
-        egui::TextEdit::singleline(value)
-            .desired_width(200.0)
-            .font(egui::TextStyle::Monospace)
-            .interactive(!any_recording_this),
-    );
-    if resp.changed() && !any_recording_this {
-        changed = true;
-    }
+    ui.vertical(|ui| {
+        let mut modified_in_ui = false;
+        let mut remove_idx: Option<usize> = None;
+        let num_bindings = bindings.len();
 
-    let rec_btn_text = if is_recording_replace {
-        egui::RichText::new(tr("Press keys... (Esc)"))
-            .color(egui::Color32::from_rgb(250, 204, 21))
-            .strong()
-    } else {
-        egui::RichText::new(tr("Record"))
-    };
+        for (idx, binding_str) in bindings.iter_mut().enumerate() {
+            let is_rec_this_slot = is_recording_replace && target_idx == idx;
 
-    if ui.button(rec_btn_text).clicked() {
-        if is_recording_replace {
-            *recording_shortcut = None;
-        } else {
-            *recording_shortcut = Some((field_id, RecordMode::Replace));
+            ui.horizontal(|ui| {
+                let avail = ui.available_width();
+                let right_controls_w = if idx == 0 {
+                    if num_bindings > 1 {
+                        295.0
+                    } else {
+                        260.0
+                    }
+                } else {
+                    120.0
+                };
+                let text_w = (avail - right_controls_w).max(120.0);
+
+                let resp = ui.add(
+                    egui::TextEdit::singleline(binding_str)
+                        .id(egui::Id::unique(format!("sc_field_edit_{}_{}", field_id, idx)))
+                        .desired_width(text_w)
+                        .font(egui::TextStyle::Monospace)
+                        .hint_text(if is_rec_this_slot {
+                            tr("Press keys... (Esc)")
+                        } else {
+                            tr("None")
+                        })
+                        .interactive(!any_recording_this),
+                );
+                if resp.changed() && !any_recording_this {
+                    modified_in_ui = true;
+                }
+
+                let rec_btn_text = if is_rec_this_slot {
+                    egui::RichText::new(tr("Press keys... (Esc)"))
+                        .color(egui::Color32::from_rgb(250, 204, 21))
+                        .strong()
+                } else {
+                    egui::RichText::new(tr("Record"))
+                };
+
+                if ui.button(rec_btn_text).clicked() {
+                    if is_rec_this_slot {
+                        *recording_shortcut = None;
+                    } else {
+                        target_idx = idx;
+                        ui.ctx()
+                            .data_mut(|d| d.insert_temp(rec_idx_key, target_idx));
+                        *recording_shortcut = Some((field_id, RecordMode::Replace));
+                    }
+                }
+
+                if num_bindings > 1 {
+                    if ui
+                        .small_button(" ✕ ")
+                        .on_hover_text(tr("Remove this shortcut"))
+                        .clicked()
+                    {
+                        remove_idx = Some(idx);
+                    }
+                }
+
+                if idx == 0 {
+                    let add_btn_text = if is_recording_append {
+                        egui::RichText::new(tr("Press keys... (Esc)"))
+                            .color(egui::Color32::from_rgb(74, 222, 128))
+                            .strong()
+                    } else {
+                        egui::RichText::new(tr("+ Add"))
+                    };
+
+                    if ui.button(add_btn_text).clicked() {
+                        if is_recording_append {
+                            *recording_shortcut = None;
+                        } else {
+                            *recording_shortcut = Some((field_id, RecordMode::Append));
+                        }
+                    }
+
+                    if value != default_val {
+                        if ui.small_button(tr("Default")).clicked() {
+                            *value = default_val.to_string();
+                            *recording_shortcut = None;
+                            changed = true;
+                        }
+                    } else {
+                        ui.colored_label(
+                            egui::Color32::from_rgb(140, 145, 155),
+                            format!("{} ({})", tr("Default"), default_val),
+                        );
+                    }
+                }
+            });
         }
-    }
 
-    let add_btn_text = if is_recording_append {
-        egui::RichText::new(tr("Press keys... (Esc)"))
-            .color(egui::Color32::from_rgb(74, 222, 128))
-            .strong()
-    } else {
-        egui::RichText::new(tr("+ Add"))
-    };
-
-    if ui.button(add_btn_text).clicked() {
         if is_recording_append {
-            *recording_shortcut = None;
-        } else {
-            *recording_shortcut = Some((field_id, RecordMode::Append));
+            ui.horizontal(|ui| {
+                let avail = ui.available_width();
+                let text_w = (avail - 120.0).max(120.0);
+                let mut placeholder = String::new();
+                ui.add(
+                    egui::TextEdit::singleline(&mut placeholder)
+                        .desired_width(text_w)
+                        .font(egui::TextStyle::Monospace)
+                        .hint_text(tr("Press keys for new shortcut... (Esc to cancel)"))
+                        .interactive(false),
+                );
+                if ui.small_button(" ✕ ").clicked() {
+                    *recording_shortcut = None;
+                }
+            });
         }
-    }
 
-    if value != default_val {
-        if ui.small_button(tr("Default")).clicked() {
-            *value = default_val.to_string();
+        if let Some(rem) = remove_idx {
+            if rem < bindings.len() {
+                bindings.remove(rem);
+                modified_in_ui = true;
+            }
+        }
+
+        if modified_in_ui {
+            let cleaned: Vec<String> = bindings
+                .into_iter()
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect();
+            *value = cleaned.join(" / ");
             changed = true;
         }
-    } else {
-        ui.colored_label(
-            egui::Color32::from_rgb(140, 145, 155),
-            format!("{} ({})", tr("Default"), default_val),
-        );
-    }
+    });
 
     ui.end_row();
     changed
@@ -1414,37 +1809,41 @@ fn color_row(
     let mut changed = false;
     ui.label(label);
 
-    let resp = ui.add(
-        egui::TextEdit::singleline(value)
-            .desired_width(130.0)
-            .hint_text(tr("Empty = Default")),
-    );
-    if resp.changed() {
-        changed = true;
-    }
-
-    let parsed = parse_color(value);
-    let mut picker_color = parsed.unwrap_or(fallback_preview);
-    if ui.color_edit_button_srgba(&mut picker_color).changed() {
-        *value = color_to_hex(picker_color);
-        changed = true;
-    }
-
-    if parsed.is_some() {
-        ui.colored_label(egui::Color32::from_rgb(74, 222, 128), tr("Applied"));
-    } else if value.trim().is_empty() {
-        ui.colored_label(egui::Color32::from_rgb(156, 163, 175), fallback_text);
-    } else {
-        ui.colored_label(
-            egui::Color32::from_rgb(251, 191, 36),
-            format!("{} -> {}", tr("Invalid"), fallback_text),
+    ui.horizontal(|ui| {
+        let avail = ui.available_width();
+        let text_w = (avail - 195.0).max(110.0);
+        let resp = ui.add(
+            egui::TextEdit::singleline(value)
+                .desired_width(text_w)
+                .font(egui::TextStyle::Monospace)
+                .hint_text(tr("Empty = Default")),
         );
-    }
+        if resp.changed() {
+            changed = true;
+        }
+
+        let parsed = parse_color(value);
+        let mut picker_color = parsed.unwrap_or(fallback_preview);
+        if ui.color_edit_button_srgba(&mut picker_color).changed() {
+            *value = color_to_hex(picker_color);
+            changed = true;
+        }
+
+        if parsed.is_some() {
+            ui.colored_label(egui::Color32::from_rgb(74, 222, 128), tr("Applied"));
+        } else if value.trim().is_empty() {
+            ui.colored_label(egui::Color32::from_rgb(156, 163, 175), fallback_text);
+        } else {
+            ui.colored_label(
+                egui::Color32::from_rgb(251, 191, 36),
+                format!("{} -> {}", tr("Invalid"), fallback_text),
+            );
+        }
+    });
 
     ui.end_row();
     changed
 }
-
 
 #[cfg(test)]
 #[path = "test/prefs_ui_tests.rs"]
