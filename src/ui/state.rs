@@ -38,6 +38,7 @@ pub struct PaneContext {
     pub popup_open: bool,
     pub mode: InteractionMode,
     pub external_zoom_delta: f32,
+    pub is_selecting_text: bool,
 }
 
 impl PaneContext {

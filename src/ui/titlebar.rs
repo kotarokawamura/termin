@@ -347,7 +347,7 @@ pub fn render_titlebar(
     };
 
     let in_middle_now = pointer_pos.is_some_and(pos_in_middle);
-    let pressed_in_middle = press_origin.is_some_and(pos_in_middle) || in_middle_now;
+    let pressed_in_middle = press_origin.is_some_and(pos_in_middle);
 
     if can_interact && !*editing_title && !any_moving && !output.toggle_tile_move && output.action.is_none() {
         if bar_resp.double_clicked() {

@@ -69,7 +69,11 @@ pub struct TerminalPane {
     pub session: Box<dyn SessionDriver>,
     pub selection_start: Option<(u16, u16)>,
     pub selection_end: Option<(u16, u16)>,
-    select_anchor_pos: Option<egui::Pos2>,
+    /// スクロールバック先頭からの絶対行インデックス(usize)と列(u16)による選択開始位置
+    pub abs_selection_start: Option<(usize, u16)>,
+    /// スクロールバック先頭からの絶対行インデックス(usize)と列(u16)による選択終了位置
+    pub abs_selection_end: Option<(usize, u16)>,
+    pub select_anchor_pos: Option<egui::Pos2>,
     pub pending_paste: bool,
     pub super_key_latched: bool,
     grid_cache_meta: Option<GridCacheMeta>,
@@ -117,6 +121,8 @@ impl TerminalPane {
             session,
             selection_start: None,
             selection_end: None,
+            abs_selection_start: None,
+            abs_selection_end: None,
             select_anchor_pos: None,
             pending_paste: false,
             super_key_latched: false,
@@ -153,7 +159,7 @@ impl TerminalPane {
             let new_sr = (sr as i32) - shift;
             let new_er = (er as i32) - shift;
             // 選択範囲が完全に画面上端より上に流れ去ったら選択解除
-            if new_er < 0 {
+            if new_er < 0 && self.abs_selection_start.is_none() {
                 self.selection_start = None;
                 self.selection_end = None;
             } else {
@@ -161,6 +167,51 @@ impl TerminalPane {
                 self.selection_end = Some((new_er.max(0) as u16, ec));
             }
         }
+        self.sync_viewport_selection_from_abs();
+    }
+
+    /// `abs_selection_start` / `abs_selection_end` から現在画面に見えている範囲の `selection_start` / `selection_end` を更新する
+    fn sync_viewport_selection_from_abs(&mut self) {
+        let (Some(a_start), Some(a_end)) = (self.abs_selection_start, self.abs_selection_end) else {
+            return;
+        };
+        let (start, end) = if a_start <= a_end {
+            (a_start, a_end)
+        } else {
+            (a_end, a_start)
+        };
+
+        let (rows, cols) = self.backend.size();
+        let rows_usize = rows.get() as usize;
+        let last_col = cols.get().saturating_sub(1);
+        let max_scroll = self.backend.max_scroll_offset();
+        let cur_scroll = self.backend.scroll_offset();
+        let view_top = max_scroll.saturating_sub(cur_scroll);
+        let view_bottom = view_top + rows_usize.saturating_sub(1);
+
+        // 選択範囲が現在の表示領域と全く重なっていない場合
+        if end.0 < view_top || start.0 > view_bottom {
+            self.selection_start = None;
+            self.selection_end = None;
+            return;
+        }
+
+        let vis_sr = if start.0 <= view_top {
+            0
+        } else {
+            (start.0 - view_top) as u16
+        };
+        let vis_sc = if start.0 < view_top { 0 } else { start.1 };
+
+        let vis_er = if end.0 >= view_bottom {
+            rows.get().saturating_sub(1)
+        } else {
+            (end.0 - view_top) as u16
+        };
+        let vis_ec = if end.0 > view_bottom { last_col } else { end.1 };
+
+        self.selection_start = Some((vis_sr, vis_sc));
+        self.selection_end = Some((vis_er, vis_ec));
     }
 
     pub fn is_alive(&mut self) -> bool {
@@ -336,8 +387,8 @@ impl TerminalPane {
 
         let inner_w = (rect.width() - pad * 2.0).max(0.0);
         let inner_h = (rect.height() - pad * 2.0).max(0.0);
-        let new_cols:NonZeroU16 = NonZeroU16::new(((inner_w / char_w).floor() as u16).max(10)).unwrap();
-        let new_rows:NonZeroU16 = NonZeroU16::new(((inner_h / char_h).floor() as u16).max(4)).unwrap();
+        let new_cols: NonZeroU16 = NonZeroU16::new(((inner_w / char_w).floor() as u16).max(10)).unwrap();
+        let new_rows: NonZeroU16 = NonZeroU16::new(((inner_h / char_h).floor() as u16).max(4)).unwrap();
         let (cur_rows, cur_cols): (NonZeroU16, NonZeroU16) = self.backend.size();
         if (new_rows, new_cols) != (cur_rows, cur_cols) {
             self.backend.resize(new_rows, new_cols);
@@ -372,14 +423,45 @@ impl TerminalPane {
                     self.select_anchor_pos = Some(pos);
                     self.selection_start = None;
                     self.selection_end = None;
+                    self.abs_selection_start = None;
+                    self.abs_selection_end = None;
                 }
             }
         }
         if primary_down && can_select_text {
             if let (Some(anchor), Some(pos)) = (self.select_anchor_pos, pointer_pos) {
-                if pos.distance(anchor) >= 2.0 {
-                    self.selection_start = Some(pos_to_cell(anchor));
-                    self.selection_end = Some(pos_to_cell(pos));
+                // 画面外へのドラッグによるオートスクロール処理
+                let mut auto_scrolled = 0isize;
+                if pos.y < rect.min.y {
+                    let old_sc = self.backend.scroll_offset();
+                    self.backend.scroll(1);
+                    auto_scrolled = (self.backend.scroll_offset() as isize) - (old_sc as isize);
+                    ui.ctx().request_repaint();
+                } else if pos.y > rect.max.y {
+                    let old_sc = self.backend.scroll_offset();
+                    self.backend.scroll(-1);
+                    auto_scrolled = (self.backend.scroll_offset() as isize) - (old_sc as isize);
+                    ui.ctx().request_repaint();
+                }
+
+                let mut current_anchor = anchor;
+                if auto_scrolled != 0 {
+                    current_anchor.y += (auto_scrolled as f32) * char_h;
+                    self.select_anchor_pos = Some(current_anchor);
+                }
+
+                if pos.distance(current_anchor) >= 2.0 {
+                    let max_sc = self.backend.max_scroll_offset();
+                    let cur_sc = self.backend.scroll_offset();
+                    let view_top = max_sc.saturating_sub(cur_sc);
+
+                    if self.abs_selection_start.is_none() {
+                        let (ar, ac) = pos_to_cell(current_anchor);
+                        self.abs_selection_start = Some((view_top + ar as usize, ac));
+                    }
+                    let (pr, pc) = pos_to_cell(pos);
+                    self.abs_selection_end = Some((view_top + pr as usize, pc));
+                    self.sync_viewport_selection_from_abs();
                 }
             }
         }
@@ -397,6 +479,7 @@ impl TerminalPane {
                     let delta_rows = (self.scroll_accum_y / step_px).trunc() as isize;
                     self.scroll_accum_y -= (delta_rows as f32) * step_px;
                     self.backend.scroll(delta_rows);
+                    self.sync_viewport_selection_from_abs();
                 }
             }
         }
@@ -424,6 +507,7 @@ impl TerminalPane {
                     .clamp(0.0, 1.0);
                 let target_offset = ((1.0 - rel_y) * (max_scroll as f32)).round() as usize;
                 self.backend.set_scroll_offset(target_offset);
+                self.sync_viewport_selection_from_abs();
             }
         }
 
@@ -454,6 +538,8 @@ impl TerminalPane {
                     }
                     MenuAction::ClearScrollback => {
                         self.backend.clear_scrollback();
+                        self.abs_selection_start = None;
+                        self.abs_selection_end = None;
                     }
                     MenuAction::ClosePane => {
                         menu_action_output = Some(TitleBarAction::ClosePane);
@@ -546,7 +632,7 @@ impl TerminalPane {
             for r in 0..rows.get() {
                 row_cells.clear();
                 let mut hasher = std::collections::hash_map::DefaultHasher::new();
-                let cols_get:u16 = cols.get();
+                let cols_get: u16 = cols.get();
 
                 let row_sel = norm_selection.and_then(|(start, end)| {
                     if r >= start.0 && r <= end.0 {
@@ -636,7 +722,6 @@ impl TerminalPane {
                     ));
                 }
 
-
                 let mut c: u16 = 0;
                 while c < cols.get() {
                     let cell = &row_cells[c as usize];
@@ -644,7 +729,6 @@ impl TerminalPane {
                         || ((cell.ch == ' ' || cell.ch == '\0') && !cell.underline)
                     {
                         c += 1;
-
                         continue;
                     }
 
@@ -671,7 +755,6 @@ impl TerminalPane {
                             cache.bg_and_lines.push((ul_rect, fg_color));
                         }
                         c += 1;
-
                         continue;
                     }
 
@@ -890,8 +973,59 @@ impl TerminalPane {
         Some(lines.join("\n"))
     }
 
+    /// スクロールバック領域を含む絶対行ベースでの選択テキストをすべて抽出する
+    pub fn extract_full_selected_text(&mut self) -> Option<String> {
+        if let (Some(a_start), Some(a_end)) = (self.abs_selection_start, self.abs_selection_end) {
+            let (start, end) = if a_start <= a_end {
+                (a_start, a_end)
+            } else {
+                (a_end, a_start)
+            };
+
+            let (rows, cols) = self.backend.size();
+            let rows_usize = rows.get() as usize;
+            let last_col = cols.get().saturating_sub(1);
+            let orig_scroll = self.backend.scroll_offset();
+            let max_scroll = self.backend.max_scroll_offset();
+            let max_abs_row = max_scroll + rows_usize.saturating_sub(1);
+
+            let start_r = start.0.min(max_abs_row);
+            let end_r = end.0.min(max_abs_row);
+            let mut lines = Vec::with_capacity(end_r.saturating_sub(start_r) + 1);
+
+            for abs_r in start_r..=end_r {
+                // 対象の絶対行 `abs_r` が画面内の行インデックス `local_r` に来るよう一時的にスクロール位置を変更
+                let (target_scroll, local_r) = if abs_r < max_scroll {
+                    (max_scroll - abs_r, 0u16)
+                } else {
+                    (0, (abs_r - max_scroll) as u16)
+                };
+                self.backend.set_scroll_offset(target_scroll);
+
+                let c_start = if abs_r == start.0 { start.1.min(last_col) } else { 0 };
+                let c_end = if abs_r == end.0 { end.1.min(last_col) } else { last_col };
+
+                let mut line = String::new();
+                if c_start <= c_end && local_r < rows.get() {
+                    for c in c_start..=c_end {
+                        let cell = self.backend.read_cell(local_r, c);
+                        if !cell.wide_continuation {
+                            line.push(if cell.ch == '\0' { ' ' } else { cell.ch });
+                        }
+                    }
+                }
+                lines.push(line.trim_end().to_string());
+            }
+
+            self.backend.set_scroll_offset(orig_scroll);
+            return Some(lines.join("\n"));
+        }
+
+        self.extract_selected_text()
+    }
+
     fn copy_selection_or_screen(&mut self, ctx: &egui::Context) {
-        if let Some(selected) = self.extract_selected_text() {
+        if let Some(selected) = self.extract_full_selected_text() {
             if !selected.is_empty() {
                 ctx.copy_text(selected);
                 return;
@@ -935,6 +1069,7 @@ impl TerminalPane {
                     }
                     if self.backend.scroll_offset() > 0 {
                         self.backend.set_scroll_offset(0);
+                        self.sync_viewport_selection_from_abs();
                     }
                     self.session.write_input(text.as_bytes());
                 }
@@ -943,6 +1078,7 @@ impl TerminalPane {
                         self.pending_paste = false;
                         if self.backend.scroll_offset() > 0 {
                             self.backend.set_scroll_offset(0);
+                            self.sync_viewport_selection_from_abs();
                         }
                         self.session.write_input(text.as_bytes());
                     } else if !shortcut_handled && !current_mods.shift && !super_held {
@@ -969,10 +1105,11 @@ impl TerminalPane {
             self.copy_selection_or_screen(ui.ctx());
             return (true, None);
         }
-       if shortcut_matches_event(&shortcuts.paste, key, physical_key, modifiers, super_held) {
+        if shortcut_matches_event(&shortcuts.paste, key, physical_key, modifiers, super_held) {
             if let Some(text) = paste_text {
                 if self.backend.scroll_offset() > 0 {
                     self.backend.set_scroll_offset(0);
+                    self.sync_viewport_selection_from_abs();
                 }
                 self.session.write_input(text.as_bytes());
                 self.pending_paste = false;
@@ -984,7 +1121,6 @@ impl TerminalPane {
             }
             return (true, None);
         }
-        println!("Checking: binding='{}', key={:?}, modifiers={:?}", shortcuts.split_vertical, key, modifiers);
 
         if shortcut_matches_event(&shortcuts.split_horizontal, key, physical_key, modifiers, super_held) {
             return (true, Some(TitleBarAction::SplitHorizontal));
@@ -1204,21 +1340,27 @@ impl TerminalPane {
                         match key {
                             egui::Key::PageUp => {
                                 self.backend.scroll(page_step);
+                                self.sync_viewport_selection_from_abs();
                             }
                             egui::Key::PageDown => {
                                 self.backend.scroll(-page_step);
+                                self.sync_viewport_selection_from_abs();
                             }
                             egui::Key::ArrowUp => {
                                 self.backend.scroll(1);
+                                self.sync_viewport_selection_from_abs();
                             }
                             egui::Key::ArrowDown => {
                                 self.backend.scroll(-1);
+                                self.sync_viewport_selection_from_abs();
                             }
                             egui::Key::Home => {
                                 self.backend.set_scroll_offset(self.backend.max_scroll_offset());
+                                self.sync_viewport_selection_from_abs();
                             }
                             egui::Key::End => {
                                 self.backend.set_scroll_offset(0);
+                                self.sync_viewport_selection_from_abs();
                             }
                             egui::Key::Insert => {
                                 self.pending_paste = true;
@@ -1232,6 +1374,7 @@ impl TerminalPane {
                     } else if merged_mods.is_none() {
                         if self.backend.scroll_offset() > 0 {
                             self.backend.set_scroll_offset(0);
+                            self.sync_viewport_selection_from_abs();
                         }
                         match key {
                             egui::Key::Enter => self.session.write_input(b"\r"),
@@ -1270,9 +1413,12 @@ impl TerminalPane {
 
         (any_shortcut_consumed, action)
     }
+
+    #[allow(dead_code)]
     fn send_paste_text(&mut self, text: &str) {
         if self.backend.scroll_offset() > 0 {
             self.backend.set_scroll_offset(0);
+            self.sync_viewport_selection_from_abs();
         }
         let normalized = text.replace("\r\n", "\r").replace('\n', "\r");
         if self.backend.bracketed_paste_enabled() {

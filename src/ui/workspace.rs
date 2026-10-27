@@ -328,6 +328,7 @@ impl<'a> egui_tiles::Behavior<TerminalPane> for TreeBehavior<'a> {
             popup_open: self.popup_open,
             mode: self.mode,
             external_zoom_delta: self.external_zoom_delta,
+            is_selecting_text: pane.select_anchor_pos.is_some(),
         };
 
         let output = pane.ui(ui, &pane_ctx, self.menus, self.settings);
