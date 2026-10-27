@@ -342,11 +342,13 @@ impl eframe::App for TerminApp {
             (1000 / self.settings.effective_fps().clamp(1, 240) as u64).max(4),
         );
 
-        // マウス移動だけで毎ミリ秒 read() システムコールが走るのを防ぐ
-        let pty_updated = if now.duration_since(self.last_pty_poll) >= fps_interval {
+        let elapsed = now.duration_since(self.last_pty_poll);
+        let pty_updated = if elapsed >= fps_interval {
             self.last_pty_poll = now;
             self.workspace.poll_sessions()
         } else {
+                    
+            ctx.request_repaint_after(fps_interval - elapsed);
             false
         };
 

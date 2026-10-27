@@ -67,11 +67,12 @@ impl RepaintScheduler {
 
         match self.mode {
             PollMode::ContinuousFps => {
-                let fps = target_fps.clamp(1, 240) as u64;
-                let interval = Duration::from_millis((1000 / fps).max(1));
                 ctx.request_repaint_after(interval);
             }
             PollMode::EventDriven => {
+                if pty_updated {
+                    ctx.request_repaint_after(interval);
+                }
             }
         }
     }
