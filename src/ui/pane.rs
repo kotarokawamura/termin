@@ -165,8 +165,8 @@ impl TerminalPane {
 
         let tile_id = ctx.tile_id;
         let pane_rect = ui.max_rect();
-        let canvas_id = egui::Id::new(("term_canvas", tile_id));
-        let scrollbar_id = egui::Id::new(("term_scrollbar", tile_id));
+        let canvas_id = egui::Id::unique(("term_canvas", tile_id));
+        let scrollbar_id = egui::Id::unique(("term_scrollbar", tile_id));
 
         let blocked = ctx.is_blocked();
         let visually_active = ctx.is_visually_active();

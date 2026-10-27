@@ -60,7 +60,7 @@ impl RepaintScheduler {
         }
     }
 
-    /// 毎フレーム末尾で呼び出し、モードに応じた次フレームの再描画予約を行う。
+    /// Called at each frame end to schedule the next frame's redraw according to the mode.
     pub fn schedule_next_frame(&self, ctx: &egui::Context, pty_updated: bool, target_fps: u32) {
         let fps = target_fps.clamp(1, 240) as u64;
         let interval = Duration::from_millis((1000 / fps).max(1));

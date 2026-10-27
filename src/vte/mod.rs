@@ -15,7 +15,6 @@
 // Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
 pub mod vt100_adapter;
 
-use std::num::NonZeroU16;
 pub use vt100_adapter::Vt100Adapter;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

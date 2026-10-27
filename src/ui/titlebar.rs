@@ -233,7 +233,7 @@ pub fn render_titlebar(
             egui::pos2(avail_right, bar_rect.max.y - 1.0),
         );
 
-        let edit_id = egui::Id::new(("pane_title_edit", ctx.tile_id));
+        let edit_id = egui::Id::unique(("pane_title_edit", ctx.tile_id));
         if *editing_title {
             let edit_w = middle_rect.width().min(180.0).max(40.0);
             let ideal_min_x = (bar_rect.center().x - edit_w * 0.5).clamp(
@@ -253,7 +253,7 @@ pub fn render_titlebar(
                 egui::TextEdit::singleline(title)
                     .id(edit_id)
                     .desired_width(edit_w)
-                    .horizontal_align(egui::Align::Center)
+                    .align(egui::Align2::CENTER_CENTER)
                     .font(egui::TextStyle::Monospace),
             );
             #[cfg(test)]
@@ -291,7 +291,7 @@ pub fn render_titlebar(
                         egui::Direction::LeftToRight,
                     )),
             );
-            // Sense::hover() にすることで、タイトル文字上のドラッグが bar_resp から奪われないようにする
+            // Use Sense::hover() so that dragging over the title text isn't stolen from bar_resp.
             let lbl_resp = label_ui.add(
                 egui::Label::new(
                     egui::RichText::new(title.as_str())

@@ -213,7 +213,7 @@ impl PreferencesWindow {
             }
         }
 
-        let prefs_win_id = egui::Id::new("custom_drag_bar_prefs_window_v2");
+        let prefs_win_id = egui::Id::unique("custom_drag_bar_prefs_window_v2");
         if self.toggle_collapse_requested {
             self.toggle_collapse_requested = false;
             if !self.open {
@@ -238,7 +238,7 @@ impl PreferencesWindow {
                     .color(egui::Color32::WHITE)
                     .strong(),
             )
-            .id(egui::Id::new("custom_drag_bar_prefs_window_v2"))
+            .id(prefs_win_id)
             .open(&mut is_open)
             .resizable(true)
             .collapsible(true)
@@ -621,7 +621,7 @@ impl PreferencesWindow {
                 .color(egui::Color32::WHITE)
                 .strong(),
         )
-        .id(egui::Id::new("system_font_sample_catalog_window_v2"))
+        .id(egui::Id::unique("system_font_sample_catalog_window_v2"))
         .open(&mut is_open)
         .resizable(true)
         .collapsible(true)

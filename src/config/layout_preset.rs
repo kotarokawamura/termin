@@ -134,7 +134,7 @@ impl LayoutNode {
             &mut first_pane_id,
             wakeup_ctx,
         );
-        let tree = Tree::new(egui::Id::new("termin_workspace"), root_id, tiles);
+        let tree = Tree::new(egui::Id::unique("termin_workspace"), root_id, tiles);
         (tree, first_pane_id)
     }
 
