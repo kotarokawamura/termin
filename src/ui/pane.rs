@@ -78,6 +78,7 @@ pub struct TerminalPane {
     last_rendered_gen: u64,
     last_rendered_scroll: usize,
     last_rendered_sel: Option<((u16, u16), (u16, u16))>,
+    last_max_scroll: usize,
 }
 
 impl TerminalPane {
@@ -125,17 +126,41 @@ impl TerminalPane {
             last_rendered_gen: u64::MAX,
             last_rendered_scroll: usize::MAX,
             last_rendered_sel: None,
+            last_max_scroll: 0,
         }
     }
 
     /// Read available bytes from PTY and feed them into the VTE backend.
     pub fn poll_pty(&mut self) -> bool {
+        let old_max_scroll = self.backend.max_scroll_offset();
         let bytes = self.session.read_output();
         if !bytes.is_empty() {
             self.backend.process_bytes(&bytes);
+            let new_max_scroll = self.backend.max_scroll_offset();
+            let scrolled_lines = new_max_scroll.saturating_sub(old_max_scroll);
+            if scrolled_lines > 0 && self.backend.scroll_offset() == 0 {
+                self.shift_selection_up(scrolled_lines);
+            }
+            self.last_max_scroll = new_max_scroll;
             return true;
         }
         false
+    }
+
+    fn shift_selection_up(&mut self, lines: usize) {
+        if let (Some((sr, sc)), Some((er, ec))) = (self.selection_start, self.selection_end) {
+            let shift = lines as i32;
+            let new_sr = (sr as i32) - shift;
+            let new_er = (er as i32) - shift;
+            // 選択範囲が完全に画面上端より上に流れ去ったら選択解除
+            if new_er < 0 {
+                self.selection_start = None;
+                self.selection_end = None;
+            } else {
+                self.selection_start = Some((new_sr.max(0) as u16, sc));
+                self.selection_end = Some((new_er.max(0) as u16, ec));
+            }
+        }
     }
 
     pub fn is_alive(&mut self) -> bool {
