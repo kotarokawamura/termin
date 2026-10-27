@@ -969,7 +969,7 @@ impl TerminalPane {
             self.copy_selection_or_screen(ui.ctx());
             return (true, None);
         }
-        if shortcut_matches_event(&shortcuts.paste, key, physical_key, modifiers, super_held) {
+       if shortcut_matches_event(&shortcuts.paste, key, physical_key, modifiers, super_held) {
             if let Some(text) = paste_text {
                 if self.backend.scroll_offset() > 0 {
                     self.backend.set_scroll_offset(0);
@@ -984,6 +984,8 @@ impl TerminalPane {
             }
             return (true, None);
         }
+        println!("Checking: binding='{}', key={:?}, modifiers={:?}", shortcuts.split_vertical, key, modifiers);
+
         if shortcut_matches_event(&shortcuts.split_horizontal, key, physical_key, modifiers, super_held) {
             return (true, Some(TitleBarAction::SplitHorizontal));
         }

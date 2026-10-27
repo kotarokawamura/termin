@@ -51,7 +51,7 @@ impl Default for ShortcutSettings {
             focus_next_pane: "Ctrl+Tab".to_string(),
             focus_prev_pane: "Ctrl+Shift+Tab".to_string(),
             open_preferences: "Ctrl+,".to_string(),
-            close_preferences: "Ctrl+Shift+Q".to_string(),
+            close_preferences: "Ctrl+Shift+W".to_string(),
             toggle_collapse_preferences: "Ctrl+Shift+M".to_string(),
             toggle_fullscreen: "F11".to_string(),
             zoom_in: "Ctrl+=".to_string(),

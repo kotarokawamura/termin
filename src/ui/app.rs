@@ -14,7 +14,7 @@
 // along with this program; if not, write to the Free Software
 // Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
 use eframe::{egui, Frame};
-use egui::Ui;
+use egui::{Key, KeyboardShortcut, Modifiers, Ui};
 use raw_window_handle::{HasWindowHandle as _, RawWindowHandle};
 use x11rb::connection::{Connection as _, RequestConnection as _};
 use x11rb::protocol::xinput::{self, ConnectionExt as _};
@@ -204,6 +204,16 @@ impl TerminApp {
             settings.target_fps = fps.clamp(1, 240);
         }
 
+        cc.egui_ctx.options_mut(|options| {
+            options.quit_shortcuts.clear();
+        });
+        // cc.egui_ctx.options_mut(|o| {
+        //     o.quit_shortcuts.push(KeyboardShortcut::new(
+        //             Modifiers::CTRL,
+        //             Key::Q,
+        //     ));
+        // });
+
         let scheduler = RepaintScheduler::new(poll_mode);
         let wakeup_ctx = scheduler.pty_wakeup_ctx(&cc.egui_ctx);
 
@@ -347,7 +357,7 @@ impl eframe::App for TerminApp {
             self.last_pty_poll = now;
             self.workspace.poll_sessions()
         } else {
-                    
+
             ctx.request_repaint_after(fps_interval - elapsed);
             false
         };
