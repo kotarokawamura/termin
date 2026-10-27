@@ -556,9 +556,9 @@ pub fn is_super_down(i: &egui::InputState, event_mods: Option<egui::Modifiers>) 
         || i.key_down(egui::Key::SuperRight)
 }
 
-/// キーがプレフィックス（修飾）キー単体であるか判定する。
-/// egui のバージョンによって ShiftLeft / ControlLeft 等のバリアントが存在するため、
-/// Debug 文字列も含めて全ての修飾キー単体を確実に弾く。
+/// Determines whether the key is a standalone modifier key.
+/// Since variants like `ShiftLeft` or `ControlLeft` exist depending on the egui version,
+/// this ensures all standalone modifier keys are reliably rejected, including their debug strings.
 pub fn is_modifier_only_key(key: egui::Key) -> bool {
     let name = format!("{:?}", key);
     let upper = name.to_ascii_uppercase();
@@ -599,8 +599,8 @@ pub fn is_modifier_only_key(key: egui::Key) -> bool {
     )
 }
 
-/// X11 / XWayland サーバーに現在のモディファイアマスク（Mod4 = Super）またはキーマップを問い合わせる。
-/// Wayland (XWayland) や X11 環境で winit が Super キーイベントを取りこぼす場合の確実なフォールバック。
+/// Queries the X11 / XWayland server for the current modifier mask (Mod4 = Super) or keymap.
+/// Provides a reliable fallback for when winit misses Super key events in Wayland (XWayland) or X11 environments.
 fn query_x11_super_pressed() -> bool {
     use std::sync::Mutex;
     use x11rb::connection::Connection as _;
@@ -634,7 +634,7 @@ fn query_x11_super_pressed() -> bool {
     false
 }
 
-/// 現在の egui InputState および OS 状態から Super (Meta / Windows / Command) キーが押されているか判定する
+/// Determines whether the Super (Meta / Windows / Command) key is pressed based on the current egui InputState and OS state.
 pub fn detect_super_held(i: &egui::InputState) -> bool {
     if i.modifiers.mac_cmd
         || i.key_down(egui::Key::SuperLeft)
@@ -672,7 +672,7 @@ pub fn detect_super_held(i: &egui::InputState) -> bool {
             }
         }
     }
-    // キーイベントが発生しているフレームでは X11/XWayland の Mod4Mask も確認する
+    // Also check the X11/XWayland Mod4Mask during frames where a key event occurs.
     let has_key_or_copy_event = i.events.iter().any(|ev| {
         matches!(
             ev,
@@ -688,8 +688,8 @@ pub fn detect_super_held(i: &egui::InputState) -> bool {
     false
 }
 
-/// 複数のショートカット文字列（`/`、`|`、または区切りカンマ `,`）を個別のバインディングに分割する。
-/// ただし `"Ctrl+,"` のようにキー自体がカンマである場合は分割しない。
+/// Splits multiple shortcut strings (delimited by `/`, `|`, or a comma `,`) into individual bindings.
+/// However, it ensures that commas used as the actual key (e.g., `"Ctrl+,"`) are not split.
 pub fn split_shortcut_bindings(binding: &str) -> Vec<String> {
     let mut result = Vec::new();
     for slash_part in binding.split(['/', '|']) {
