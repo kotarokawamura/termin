@@ -74,8 +74,7 @@ pub struct TerminalPane {
     pub super_key_latched: bool,
     grid_cache_meta: Option<GridCacheMeta>,
     row_caches: Vec<RowCache>,
-    cached_bg_mesh: Arc<egui::Mesh>,
-    flat_text_shapes: Vec<egui::Shape>,
+    cached_terminal_mesh: Arc<egui::Mesh>,
     last_rendered_gen: u64,
     last_rendered_scroll: usize,
     last_rendered_sel: Option<((u16, u16), (u16, u16))>,
@@ -122,8 +121,7 @@ impl TerminalPane {
             super_key_latched: false,
             grid_cache_meta: None,
             row_caches: Vec::new(),
-            cached_bg_mesh: Arc::new(egui::Mesh::default()),
-            flat_text_shapes: Vec::new(),
+            cached_terminal_mesh: Arc::new(egui::Mesh::default()),
             last_rendered_gen: u64::MAX,
             last_rendered_scroll: usize::MAX,
             last_rendered_sel: None,
@@ -698,23 +696,39 @@ impl TerminalPane {
                 }
             }
 
-            let mut bg_mesh = egui::Mesh::default();
-            self.flat_text_shapes.clear();
+            let mut combined_mesh = egui::Mesh::with_texture(egui::TextureId::default());
             for row_cache in &self.row_caches {
                 for &(r_rect, color) in &row_cache.bg_and_lines {
-                    bg_mesh.add_colored_rect(r_rect, color);
+                    combined_mesh.add_colored_rect(r_rect, color);
                 }
-                self.flat_text_shapes
-                    .extend(row_cache.text_shapes.iter().cloned());
             }
-            self.cached_bg_mesh = Arc::new(bg_mesh);
+            for row_cache in &self.row_caches {
+                for shape in &row_cache.text_shapes {
+                    if let egui::Shape::Text(text_shape) = shape {
+                        for placed_row in &text_shape.galley.rows {
+                            let row_mesh = &placed_row.visuals.mesh;
+                            let offset = text_shape.pos.to_vec2() + placed_row.pos.to_vec2();
+                            let base_idx = combined_mesh.vertices.len() as u32;
+                            combined_mesh.vertices.extend(row_mesh.vertices.iter().map(|v| {
+                                let mut v = *v;
+                                v.pos += offset;
+                                if let Some(override_color) = text_shape.override_text_color {
+                                    v.color = override_color;
+                                }
+                                v
+                            }));
+                            combined_mesh
+                                .indices
+                                .extend(row_mesh.indices.iter().map(|i| i + base_idx));
+                        }
+                    }
+                }
+            }
+            self.cached_terminal_mesh = Arc::new(combined_mesh);
         }
 
-        if !self.cached_bg_mesh.is_empty() {
-            painter.add(egui::Shape::mesh(Arc::clone(&self.cached_bg_mesh)));
-        }
-        if !self.flat_text_shapes.is_empty() {
-            painter.add(egui::Shape::Vec(self.flat_text_shapes.clone()));
+        if !self.cached_terminal_mesh.is_empty() {
+            painter.add(egui::Shape::mesh(Arc::clone(&self.cached_terminal_mesh)));
         }
 
         // Draw cursor
