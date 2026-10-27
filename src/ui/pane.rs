@@ -14,7 +14,7 @@
 // along with this program; if not, write to the Free Software
 // Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
 use std::hash::{Hash, Hasher};
-use std::num::{NonZero, NonZeroU16};
+use std::num::NonZeroU16;
 use std::sync::Arc;
 use eframe::egui;
 use crate::config::theme::{
@@ -702,28 +702,31 @@ impl TerminalPane {
                     combined_mesh.add_colored_rect(r_rect, color);
                 }
             }
-            for row_cache in &self.row_caches {
-                for shape in &row_cache.text_shapes {
-                    if let egui::Shape::Text(text_shape) = shape {
-                        for placed_row in &text_shape.galley.rows {
-                            let row_mesh = &placed_row.visuals.mesh;
-                            let offset = text_shape.pos.to_vec2() + placed_row.pos.to_vec2();
-                            let base_idx = combined_mesh.vertices.len() as u32;
-                            combined_mesh.vertices.extend(row_mesh.vertices.iter().map(|v| {
-                                let mut v = *v;
-                                v.pos += offset;
-                                if let Some(override_color) = text_shape.override_text_color {
-                                    v.color = override_color;
-                                }
-                                v
-                            }));
-                            combined_mesh
-                                .indices
-                                .extend(row_mesh.indices.iter().map(|i| i + base_idx));
+
+            // テキストの Shape 群をその場で1回だけ Tessellate して combined_mesh に結合する
+            let text_shapes: Vec<egui::epaint::ClippedShape> = self
+                .row_caches
+                .iter()
+                .flat_map(|rc| rc.text_shapes.iter().cloned())
+                .map(|shape| egui::epaint::ClippedShape {
+                    clip_rect: egui::Rect::EVERYTHING,
+                    shape,
+                    transform_after_tessellation: Default::default(),
+                })
+                .collect();
+
+            if !text_shapes.is_empty() {
+                let pixels_per_point = ui.ctx().pixels_per_point();
+                let primitives = ui.ctx().tessellate(text_shapes, pixels_per_point);
+                for prim in primitives {
+                    if let egui::epaint::Primitive::Mesh(mesh) = prim.primitive {
+                        if mesh.texture_id == combined_mesh.texture_id {
+                            combined_mesh.append(mesh);
                         }
                     }
                 }
             }
+
             self.cached_terminal_mesh = Arc::new(combined_mesh);
         }
 

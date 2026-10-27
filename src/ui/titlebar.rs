@@ -390,12 +390,17 @@ fn small_bar_button(
     label: &str,
     fg_color: egui::Color32,
     sense: egui::Sense,
-    tooltip: &str,
+    tooltip_key: &str,
 ) -> egui::Response {
     let btn = egui::Button::new(egui::RichText::new(label).color(fg_color).size(12.0))
         .frame(false)
         .sense(sense);
-    ui.add(btn).on_hover_text(tooltip)
+    let resp = ui.add(btn);
+    if resp.hovered() {
+        resp.on_hover_text(tr(tooltip_key))
+    } else {
+        resp
+    }
 }
 
 #[cfg(test)]

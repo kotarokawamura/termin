@@ -148,7 +148,7 @@ impl X11PinchListener {
     }
 
     fn poll_zoom_delta(&mut self) -> f32 {
-        // マウス高頻度移動時（500Hz〜1000Hz）に毎回システムコールを発行しないよう 30Hz (33ms) に制限
+
         let now = std::time::Instant::now();
         if now.duration_since(self.last_poll) < std::time::Duration::from_millis(33) {
             return 1.0;
@@ -189,6 +189,7 @@ pub struct TerminApp {
     x11_pinch_init_attempted: bool,
     startup_focus_frames: u8,
     current_zoom_delta: f32,
+    last_pty_poll: std::time::Instant,
 }
 
 impl TerminApp {
@@ -230,6 +231,7 @@ impl TerminApp {
             x11_pinch_init_attempted,
             startup_focus_frames: 10,
             current_zoom_delta: 1.0,
+            last_pty_poll: std::time::Instant::now(),
         }
     }
 
@@ -335,7 +337,19 @@ impl eframe::App for TerminApp {
             ctx.request_repaint();
         }
 
-        let pty_updated = self.workspace.poll_sessions();
+        let now = std::time::Instant::now();
+        let fps_interval = std::time::Duration::from_millis(
+            (1000 / self.settings.effective_fps().clamp(1, 240) as u64).max(4),
+        );
+
+        // マウス移動だけで毎ミリ秒 read() システムコールが走るのを防ぐ
+        let pty_updated = if now.duration_since(self.last_pty_poll) >= fps_interval {
+            self.last_pty_poll = now;
+            self.workspace.poll_sessions()
+        } else {
+            false
+        };
+
         if !is_minimized {
             self.scheduler.schedule_next_frame(
                 ctx,
