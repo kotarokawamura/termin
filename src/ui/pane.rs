@@ -296,7 +296,10 @@ impl TerminalPane {
         let term_font_size =
             (settings.effective_terminal_font_size() * self.zoom_scale).clamp(6.0, 64.0);
         let font_id = egui::FontId::monospace(term_font_size);
-        let char_w = (term_font_size * 0.6).max(4.0);
+        // Use actual font glyph width instead of fixed 0.6 multiplier
+        let char_w = ui
+            .fonts_mut(|f| f.glyph_width(&font_id, 'M'))
+            .max(4.0);
 
         let ink_max_y = ui.fonts_mut(|f| f.row_height(&font_id));
         let ink_h = ink_max_y.max(term_font_size * 0.85);
@@ -1239,6 +1242,21 @@ impl TerminalPane {
         }
 
         (any_shortcut_consumed, action)
+    }
+    fn send_paste_text(&mut self, text: &str) {
+        if self.backend.scroll_offset() > 0 {
+            self.backend.set_scroll_offset(0);
+        }
+        let normalized = text.replace("\r\n", "\r").replace('\n', "\r");
+        if self.backend.bracketed_paste_enabled() {
+            let mut payload = Vec::with_capacity(normalized.len() + 12);
+            payload.extend_from_slice(b"\x1b[200~");
+            payload.extend_from_slice(normalized.as_bytes());
+            payload.extend_from_slice(b"\x1b[201~");
+            self.session.write_input(&payload);
+        } else {
+            self.session.write_input(normalized.as_bytes());
+        }
     }
 }
 

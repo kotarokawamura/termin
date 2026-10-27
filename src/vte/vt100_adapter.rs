@@ -38,6 +38,10 @@ impl Vt100Adapter {
             generation: 0,
         }
     }
+    
+    pub fn bracketed_paste_enabled(&mut self) -> bool{
+        self.parser.screen().bracketed_paste()
+    }
 
     pub fn generation(&self) -> u64 {
         self.generation
@@ -518,4 +522,5 @@ mod tests {
         assert_eq!(adapter.read_cell(0, 5).ch, '0');
         assert_eq!(adapter.read_cell(0, 6).ch, '1');
     }
+
 }
