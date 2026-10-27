@@ -1,4 +1,3 @@
-use std::num::NonZeroU16;
 // Copyright (C) [2026/10/19] kotaro,termin
 //
 // This program is free software; you can redistribute it and/or
@@ -15,6 +14,7 @@ use std::num::NonZeroU16;
 // along with this program; if not, write to the Free Software
 // Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
 use crate::vte::{CursorState, RenderableCell, RgbColor};
+use std::num::NonZeroU16;
 
 const DEFAULT_FG: RgbColor = RgbColor(230, 230, 230);
 const DEFAULT_BG: RgbColor = RgbColor(18, 18, 18);
@@ -482,14 +482,17 @@ mod tests {
         assert_eq!(ansi_idx_to_rgb(255), RgbColor(238, 238, 238));
     }
 
+    fn nz(v: u16) -> NonZeroU16 {
+        NonZeroU16::new(v).unwrap()
+    }
+
     #[test]
     fn test_wide_char_resize_does_not_insert_extra_spaces() {
-        let mut adapter = Vt100Adapter::new(10, 40);
+        let mut adapter = Vt100Adapter::new(nz(10), nz(40));
         adapter.process_bytes("日本語テスト".as_bytes());
-        adapter.resize(10, 50);
-        adapter.resize(10, 40);
+        adapter.resize(nz(10), nz(50));
+        adapter.resize(nz(10), nz(40));
 
-        // "日" at col 0, continuation at col 1, "本" at col 2, continuation at col 3, "語" at col 4
         assert_eq!(adapter.read_cell(0, 0).ch, '日');
         assert!(adapter.read_cell(0, 1).wide_continuation);
         assert_eq!(adapter.read_cell(0, 2).ch, '本');
@@ -499,15 +502,14 @@ mod tests {
 
     #[test]
     fn test_scrollback_preserved_across_resize() {
-        let mut adapter = Vt100Adapter::new(5, 40);
+        let mut adapter = Vt100Adapter::new(nz(5), nz(40));
         for i in 1..=20 {
             adapter.process_bytes(format!("line {:02}\r\n", i).as_bytes());
         }
         assert!(adapter.max_scroll_offset() > 0);
         let initial_max = adapter.max_scroll_offset();
 
-        // Resize (e.g. when zooming or splitting pane) must keep scrollback history
-        adapter.resize(5, 50);
+        adapter.resize(nz(5), nz(50));
         assert_eq!(adapter.max_scroll_offset(), initial_max);
 
         adapter.set_scroll_offset(initial_max);

@@ -302,16 +302,16 @@ impl TerminalPane {
 
         let ink_max_y = ui.fonts_mut(|f| f.row_height(&font_id));
         let ink_h = ink_max_y.max(term_font_size * 0.85);
-        let char_h = (ink_h + (term_font_size * 0.28).max(4.0))
+        let char_h = (ink_h + (term_font_size * 0.28).max(2.0))
             .round()
             .max(8.0);
         let glyph_y_offset = (char_h - ink_max_y) * 0.5;
-        let pad = 4.0_f32;
+        let pad = 2.0_f32;
 
         let inner_w = (rect.width() - pad * 2.0).max(0.0);
         let inner_h = (rect.height() - pad * 2.0).max(0.0);
         let new_cols:NonZeroU16 = NonZeroU16::new(((inner_w / char_w).floor() as u16).max(10)).unwrap();
-        let new_rows: NonZeroU16 = NonZeroU16::new(((inner_h / char_h).floor() as u16).max(4)).unwrap();
+        let new_rows:NonZeroU16 = NonZeroU16::new(((inner_h / char_h).floor() as u16).max(4)).unwrap();
         let (cur_rows, cur_cols): (NonZeroU16, NonZeroU16) = self.backend.size();
         if (new_rows, new_cols) != (cur_rows, cur_cols) {
             self.backend.resize(new_rows, new_cols);
