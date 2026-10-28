@@ -320,6 +320,32 @@ impl ThemeSettings {
         }
     }
 
+    pub fn broadcast_group_titlebar_bg(&self, group_id: usize, is_active: bool) -> Color32 {
+        const ACTIVE_PALETTE: [(u8, u8, u8); 6] = [
+            (25, 118, 210), // Group 1: Blue
+            (16, 142, 92),  // Group 2: Emerald Green
+            (138, 58, 185), // Group 3: Purple
+            (217, 119, 6),  // Group 4: Amber/Orange
+            (0, 151, 167),  // Group 5: Cyan/Teal
+            (194, 24, 91),  // Group 6: Magenta/Pink
+        ];
+        const INACTIVE_PALETTE: [(u8, u8, u8); 6] = [
+            (21, 75, 135),  // Group 1: Muted Blue
+            (18, 88, 60),   // Group 2: Muted Emerald Green
+            (86, 40, 116),  // Group 3: Muted Purple
+            (138, 78, 12),  // Group 4: Muted Amber/Orange
+            (10, 93, 104),  // Group 5: Muted Cyan/Teal
+            (120, 22, 62),  // Group 6: Muted Magenta/Pink
+        ];
+        let idx = group_id.saturating_sub(1) % ACTIVE_PALETTE.len();
+        let (r, g, b) = if is_active {
+            ACTIVE_PALETTE[idx]
+        } else {
+            INACTIVE_PALETTE[idx]
+        };
+        Color32::from_rgb(r, g, b)
+    }
+
     pub fn titlebar_fg(&self, is_active: bool) -> Color32 {
         if is_active {
             parse_color(&self.title_active_fg).unwrap_or(Color32::WHITE)

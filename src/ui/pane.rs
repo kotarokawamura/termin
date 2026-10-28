@@ -38,7 +38,9 @@ pub fn default_shell_title() -> String {
 pub struct PaneUiOutput {
     pub action: Option<TitleBarAction>,
     pub toggle_tile_move: bool,
+    pub toggle_broadcast_select: bool,
     pub clicked_or_focused: bool,
+    pub broadcast_input: Vec<u8>,
 }
 
 const SCROLLBAR_WIDTH: f32 = 10.0;
@@ -63,6 +65,7 @@ pub struct TerminalPane {
     pub id: usize,
     pub title: String,
     pub editing_title: bool,
+    pub broadcast_group: Option<usize>,
     pub zoom_scale: f32,
     pub scroll_accum_y: f32,
     pub backend: Vt100Adapter,
@@ -76,6 +79,7 @@ pub struct TerminalPane {
     pub select_anchor_pos: Option<egui::Pos2>,
     pub pending_paste: bool,
     pub super_key_latched: bool,
+    pending_broadcast_input: Vec<u8>,
     grid_cache_meta: Option<GridCacheMeta>,
     row_caches: Vec<RowCache>,
     cached_terminal_mesh: Arc<egui::Mesh>,
@@ -126,6 +130,7 @@ impl TerminalPane {
             id,
             title: title.to_string(),
             editing_title: false,
+            broadcast_group: None,
             zoom_scale: 1.0,
             scroll_accum_y: 0.0,
             backend,
@@ -137,6 +142,7 @@ impl TerminalPane {
             select_anchor_pos: None,
             pending_paste: false,
             super_key_latched: false,
+            pending_broadcast_input: Vec::new(),
             grid_cache_meta: None,
             row_caches: Vec::new(),
             cached_terminal_mesh: Arc::new(egui::Mesh::default()),
@@ -145,6 +151,24 @@ impl TerminalPane {
             last_rendered_sel: None,
             last_max_scroll: 0,
         }
+    }
+
+    fn write_pty_input(&mut self, data: &[u8]) {
+        self.session.write_input(data);
+        if self.broadcast_group.is_some() {
+            self.pending_broadcast_input.extend_from_slice(data);
+        }
+    }
+
+    pub fn receive_broadcast_input(&mut self, data: &[u8]) {
+        if data.is_empty() {
+            return;
+        }
+        if self.backend.scroll_offset() > 0 {
+            self.backend.set_scroll_offset(0);
+            self.sync_viewport_selection_from_abs();
+        }
+        self.session.write_input(data);
     }
 
     pub fn current_working_dir(&self) -> Option<std::path::PathBuf> {
@@ -252,6 +276,7 @@ impl TerminalPane {
         menus: &MenuManager,
         settings: &ThemeSettings,
     ) -> PaneUiOutput {
+        self.pending_broadcast_input.clear();
         let mut clicked_or_focused = false;
 
         let tile_id = ctx.tile_id;
@@ -262,6 +287,8 @@ impl TerminalPane {
         let blocked = ctx.is_blocked();
         let visually_active = ctx.is_visually_active();
         let any_moving = ctx.is_any_moving();
+        let any_selecting_broadcast = ctx.is_any_selecting_broadcast();
+        let any_selecting_pane = any_moving || any_selecting_broadcast;
 
         // 1. Render Terminator-style titlebar
         let tb_out = render_titlebar(
@@ -277,7 +304,7 @@ impl TerminalPane {
             clicked_or_focused = true;
         }
 
-        if blocked || ctx.popup_open || !visually_active || any_moving {
+        if blocked || ctx.popup_open || !visually_active || any_selecting_pane {
             self.select_anchor_pos = None;
         }
 
@@ -310,7 +337,7 @@ impl TerminalPane {
 
         let canvas_sense = if ctx.popup_open || pointer_over_floating {
             egui::Sense::hover()
-        } else if visually_active && !any_moving {
+        } else if visually_active && !any_selecting_pane {
             egui::Sense::click_and_drag()
         } else {
             egui::Sense::CLICK
@@ -324,7 +351,8 @@ impl TerminalPane {
         };
         let scrollbar_resp = ui.interact(scrollbar_rect, scrollbar_id, scrollbar_sense);
 
-        if !ctx.popup_open
+        if !blocked
+            && !ctx.popup_open
             && !pointer_over_floating
             && (term_resp.clicked()
             || term_resp.drag_started()
@@ -540,7 +568,7 @@ impl TerminalPane {
         // 3. Context menu for the terminal screen canvas
         let mut menu_action_output = None;
 
-        if !any_moving {
+        if !any_selecting_pane {
             if let Some((_ctx, menu_action)) =
                 menus.show(&term_resp, MenuContext::Pane(tile_id), &settings.shortcuts)
             {
@@ -895,7 +923,7 @@ impl TerminalPane {
             );
         }
 
-        // Highlight border during pane move mode
+        // Highlight border during pane move mode or broadcast selection mode
         if ctx.is_moving_self() {
             painter.rect_stroke(
                 full_rect.shrink(1.5),
@@ -903,7 +931,14 @@ impl TerminalPane {
                 egui::Stroke::new(2.0, egui::Color32::from_rgb(250, 204, 21)),
                 egui::StrokeKind::Inside,
             );
-        } else if any_moving && pointer_pos.is_some_and(|p| pane_rect.contains(p)) {
+        } else if ctx.is_selecting_broadcast_self() {
+            painter.rect_stroke(
+                full_rect.shrink(1.5),
+                0.0,
+                egui::Stroke::new(2.0, egui::Color32::from_rgb(56, 189, 248)),
+                egui::StrokeKind::Inside,
+            );
+        } else if any_selecting_pane && pointer_pos.is_some_and(|p| pane_rect.contains(p)) {
             painter.rect_stroke(
                 full_rect.shrink(1.5),
                 0.0,
@@ -915,7 +950,9 @@ impl TerminalPane {
         PaneUiOutput {
             action: tb_out.action.or(shortcut_key_action).or(menu_action_output),
             toggle_tile_move: tb_out.toggle_tile_move,
+            toggle_broadcast_select: tb_out.toggle_broadcast_select,
             clicked_or_focused,
+            broadcast_input: std::mem::take(&mut self.pending_broadcast_input),
         }
     }
 
@@ -1053,7 +1090,7 @@ impl TerminalPane {
                         self.backend.set_scroll_offset(0);
                         self.sync_viewport_selection_from_abs();
                     }
-                    self.session.write_input(text.as_bytes());
+                    self.write_pty_input(text.as_bytes());
                 }
                 egui::Event::Paste(text) => {
                     if self.pending_paste {
@@ -1062,9 +1099,9 @@ impl TerminalPane {
                             self.backend.set_scroll_offset(0);
                             self.sync_viewport_selection_from_abs();
                         }
-                        self.session.write_input(text.as_bytes());
+                        self.write_pty_input(text.as_bytes());
                     } else if !shortcut_handled && !current_mods.shift && !super_held {
-                        self.session.write_input(&[0x16]);
+                        self.write_pty_input(&[0x16]);
                     }
                 }
                 _ => {}
@@ -1093,7 +1130,7 @@ impl TerminalPane {
                     self.backend.set_scroll_offset(0);
                     self.sync_viewport_selection_from_abs();
                 }
-                self.session.write_input(text.as_bytes());
+                self.write_pty_input(text.as_bytes());
                 self.pending_paste = false;
             } else if !has_paste_event {
                 self.pending_paste = true;
@@ -1196,7 +1233,7 @@ impl TerminalPane {
                             action = act;
                         }
                     } else if !mods.shift && !super_held {
-                        self.session.write_input(&[0x03]);
+                        self.write_pty_input(&[0x03]);
                     }
                 }
                 egui::Event::Cut => {
@@ -1220,7 +1257,7 @@ impl TerminalPane {
                             action = act;
                         }
                     } else if !mods.shift && !super_held {
-                        self.session.write_input(&[0x18]);
+                        self.write_pty_input(&[0x18]);
                     }
                 }
                 egui::Event::Paste(text) => {
@@ -1297,15 +1334,15 @@ impl TerminalPane {
                             let ch = key_name.chars().next().unwrap();
                             if ch.is_ascii_uppercase() {
                                 let ctrl_code = (ch as u8) & 0x1F;
-                                self.session.write_input(&[ctrl_code]);
+                                self.write_pty_input(&[ctrl_code]);
                             }
                         } else {
                             match effective_key {
-                                egui::Key::Space => self.session.write_input(&[0x00]),
-                                egui::Key::Slash => self.session.write_input(&[0x1f]),
-                                egui::Key::OpenBracket => self.session.write_input(&[0x1b]),
-                                egui::Key::Backslash => self.session.write_input(&[0x1c]),
-                                egui::Key::CloseBracket => self.session.write_input(&[0x1d]),
+                                egui::Key::Space => self.write_pty_input(&[0x00]),
+                                egui::Key::Slash => self.write_pty_input(&[0x1f]),
+                                egui::Key::OpenBracket => self.write_pty_input(&[0x1b]),
+                                egui::Key::Backslash => self.write_pty_input(&[0x1c]),
+                                egui::Key::CloseBracket => self.write_pty_input(&[0x1d]),
                                 _ => {}
                             }
                         }
@@ -1314,7 +1351,7 @@ impl TerminalPane {
                         let key_name = effective_key.name();
                         if key_name.len() == 1 {
                             let ch = key_name.chars().next().unwrap().to_ascii_lowercase();
-                            self.session.write_input(&[0x1b, ch as u8]);
+                            self.write_pty_input(&[0x1b, ch as u8]);
                         }
                     } else if merged_mods.shift && !merged_mods.ctrl && !merged_mods.alt {
                         let (rows, _) = self.backend.size();
@@ -1349,7 +1386,7 @@ impl TerminalPane {
                                 ui.ctx().send_viewport_cmd(egui::ViewportCommand::RequestPaste);
                             }
                             egui::Key::Tab => {
-                                self.session.write_input(b"\x1b[Z");
+                                self.write_pty_input(b"\x1b[Z");
                             }
                             _ => {}
                         }
@@ -1359,32 +1396,32 @@ impl TerminalPane {
                             self.sync_viewport_selection_from_abs();
                         }
                         match key {
-                            egui::Key::Enter => self.session.write_input(b"\r"),
-                            egui::Key::Backspace => self.session.write_input(&[0x7f]),
-                            egui::Key::Tab => self.session.write_input(b"\t"),
-                            egui::Key::Escape => self.session.write_input(&[0x1b]),
-                            egui::Key::ArrowUp => self.session.write_input(b"\x1b[A"),
-                            egui::Key::ArrowDown => self.session.write_input(b"\x1b[B"),
-                            egui::Key::ArrowRight => self.session.write_input(b"\x1b[C"),
-                            egui::Key::ArrowLeft => self.session.write_input(b"\x1b[D"),
-                            egui::Key::Home => self.session.write_input(b"\x1b[H"),
-                            egui::Key::End => self.session.write_input(b"\x1b[F"),
-                            egui::Key::Insert => self.session.write_input(b"\x1b[2~"),
-                            egui::Key::Delete => self.session.write_input(b"\x1b[3~"),
-                            egui::Key::PageUp => self.session.write_input(b"\x1b[5~"),
-                            egui::Key::PageDown => self.session.write_input(b"\x1b[6~"),
-                            egui::Key::F1 => self.session.write_input(b"\x1bOP"),
-                            egui::Key::F2 => self.session.write_input(b"\x1bOQ"),
-                            egui::Key::F3 => self.session.write_input(b"\x1bOR"),
-                            egui::Key::F4 => self.session.write_input(b"\x1bOS"),
-                            egui::Key::F5 => self.session.write_input(b"\x1b[15~"),
-                            egui::Key::F6 => self.session.write_input(b"\x1b[17~"),
-                            egui::Key::F7 => self.session.write_input(b"\x1b[18~"),
-                            egui::Key::F8 => self.session.write_input(b"\x1b[19~"),
-                            egui::Key::F9 => self.session.write_input(b"\x1b[20~"),
-                            egui::Key::F10 => self.session.write_input(b"\x1b[21~"),
-                            egui::Key::F11 => self.session.write_input(b"\x1b[23~"),
-                            egui::Key::F12 => self.session.write_input(b"\x1b[24~"),
+                            egui::Key::Enter => self.write_pty_input(b"\r"),
+                            egui::Key::Backspace => self.write_pty_input(&[0x7f]),
+                            egui::Key::Tab => self.write_pty_input(b"\t"),
+                            egui::Key::Escape => self.write_pty_input(&[0x1b]),
+                            egui::Key::ArrowUp => self.write_pty_input(b"\x1b[A"),
+                            egui::Key::ArrowDown => self.write_pty_input(b"\x1b[B"),
+                            egui::Key::ArrowRight => self.write_pty_input(b"\x1b[C"),
+                            egui::Key::ArrowLeft => self.write_pty_input(b"\x1b[D"),
+                            egui::Key::Home => self.write_pty_input(b"\x1b[H"),
+                            egui::Key::End => self.write_pty_input(b"\x1b[F"),
+                            egui::Key::Insert => self.write_pty_input(b"\x1b[2~"),
+                            egui::Key::Delete => self.write_pty_input(b"\x1b[3~"),
+                            egui::Key::PageUp => self.write_pty_input(b"\x1b[5~"),
+                            egui::Key::PageDown => self.write_pty_input(b"\x1b[6~"),
+                            egui::Key::F1 => self.write_pty_input(b"\x1bOP"),
+                            egui::Key::F2 => self.write_pty_input(b"\x1bOQ"),
+                            egui::Key::F3 => self.write_pty_input(b"\x1bOR"),
+                            egui::Key::F4 => self.write_pty_input(b"\x1bOS"),
+                            egui::Key::F5 => self.write_pty_input(b"\x1b[15~"),
+                            egui::Key::F6 => self.write_pty_input(b"\x1b[17~"),
+                            egui::Key::F7 => self.write_pty_input(b"\x1b[18~"),
+                            egui::Key::F8 => self.write_pty_input(b"\x1b[19~"),
+                            egui::Key::F9 => self.write_pty_input(b"\x1b[20~"),
+                            egui::Key::F10 => self.write_pty_input(b"\x1b[21~"),
+                            egui::Key::F11 => self.write_pty_input(b"\x1b[23~"),
+                            egui::Key::F12 => self.write_pty_input(b"\x1b[24~"),
                             _ => {}
                         }
                     }
@@ -1408,9 +1445,9 @@ impl TerminalPane {
             payload.extend_from_slice(b"\x1b[200~");
             payload.extend_from_slice(normalized.as_bytes());
             payload.extend_from_slice(b"\x1b[201~");
-            self.session.write_input(&payload);
+            self.write_pty_input(&payload);
         } else {
-            self.session.write_input(normalized.as_bytes());
+            self.write_pty_input(normalized.as_bytes());
         }
     }
 }

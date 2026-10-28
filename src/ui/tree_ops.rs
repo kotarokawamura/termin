@@ -125,8 +125,105 @@ impl Workspace {
         if self.moving_tile == Some(target_id) {
             self.moving_tile = None;
         }
+        if self.selecting_broadcast_tile == Some(target_id) {
+            self.selecting_broadcast_tile = None;
+        }
 
+        self.cleanup_singleton_broadcast_groups();
         self.activate_tab_for_focused_pane();
+    }
+
+    /// 現在未使用の最小のブロードキャストグループ番号（1始まり）を返す
+    pub fn next_available_broadcast_group_id(&self) -> usize {
+        let mut candidate = 1usize;
+        loop {
+            let used = self.tree.tiles.iter().any(|(_, tile)| {
+                matches!(tile, Tile::Pane(p) if p.broadcast_group == Some(candidate))
+            });
+            if !used {
+                return candidate;
+            }
+            candidate += 1;
+        }
+    }
+
+    /// 2つのパネルをブロードキャストグループとして紐付ける
+    /// （選択先が既にグループに属していればそのグループへ追加、未所属同士なら新規グループ番号を割り当てる）
+    pub fn link_broadcast_panes(&mut self, src_id: TileId, dst_id: TileId) {
+        if src_id == dst_id {
+            return;
+        }
+        let src_exists = matches!(self.tree.tiles.get(src_id), Some(Tile::Pane(_)));
+        let dst_exists = matches!(self.tree.tiles.get(dst_id), Some(Tile::Pane(_)));
+        if !src_exists || !dst_exists {
+            return;
+        }
+
+        let dst_group = match self.tree.tiles.get(dst_id) {
+            Some(Tile::Pane(p)) => p.broadcast_group,
+            _ => None,
+        };
+        let src_group = match self.tree.tiles.get(src_id) {
+            Some(Tile::Pane(p)) => p.broadcast_group,
+            _ => None,
+        };
+
+        let group_id = dst_group
+            .or(src_group)
+            .unwrap_or_else(|| self.next_available_broadcast_group_id());
+
+        if let Some(Tile::Pane(src_pane)) = self.tree.tiles.get_mut(src_id) {
+            src_pane.broadcast_group = Some(group_id);
+        }
+        if let Some(Tile::Pane(dst_pane)) = self.tree.tiles.get_mut(dst_id) {
+            dst_pane.broadcast_group = Some(group_id);
+        }
+        self.cleanup_singleton_broadcast_groups();
+    }
+
+    /// 指定したパネルをブロードキャストグループから解除する（残り1パネル以下になったグループも自動解除）
+    pub fn leave_broadcast_group(&mut self, target_id: TileId) {
+        if let Some(Tile::Pane(pane)) = self.tree.tiles.get_mut(target_id) {
+            pane.broadcast_group = None;
+        }
+        self.cleanup_singleton_broadcast_groups();
+    }
+
+    /// 所属パネルが1つ以下になったブロードキャストグループを自動的に解除する
+    pub fn cleanup_singleton_broadcast_groups(&mut self) {
+        let mut counts: std::collections::HashMap<usize, usize> = std::collections::HashMap::new();
+        for (_, tile) in self.tree.tiles.iter() {
+            if let Tile::Pane(pane) = tile {
+                if let Some(gid) = pane.broadcast_group {
+                    *counts.entry(gid).or_insert(0) += 1;
+                }
+            }
+        }
+        for (_, tile) in self.tree.tiles.iter_mut() {
+            if let Tile::Pane(pane) = tile {
+                if let Some(gid) = pane.broadcast_group {
+                    if counts.get(&gid).copied().unwrap_or(0) < 2 {
+                        pane.broadcast_group = None;
+                    }
+                }
+            }
+        }
+    }
+
+    /// 同一ブロードキャストグループ内の他パネルへキー入力バイト列を転送する
+    pub fn broadcast_input_to_group(&mut self, src_id: TileId, group_id: usize, bytes: &[u8]) {
+        if bytes.is_empty() {
+            return;
+        }
+        for (tile_id, tile) in self.tree.tiles.iter_mut() {
+            if *tile_id != src_id {
+                if let Tile::Pane(pane) = tile {
+                    if pane.broadcast_group == Some(group_id) {
+                        pane.receive_broadcast_input(bytes);
+                    }
+                }
+            }
+        }
     }
 
     /// アクティブなパネル（または分割対象パネル）のカレントディレクトリを取得する
@@ -247,6 +344,7 @@ impl Workspace {
             self.focused_tile = first_pane;
             self.top_right_tile = first_pane;
             self.moving_tile = None;
+            self.selecting_broadcast_tile = None;
             self.recorded_rects.clear();
         }
     }

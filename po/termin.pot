@@ -71,6 +71,10 @@ msgid "Drag and drop onto another pane to swap/split"
 msgstr ""
 
 #: src/ui/titlebar.rs
+msgid "Left-click: pane move mode / Right-click: broadcast selection mode (or leave group)"
+msgstr ""
+
+#: src/ui/titlebar.rs
 msgid "[Split-H]"
 msgstr ""
 

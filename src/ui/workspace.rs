@@ -35,6 +35,7 @@ pub struct Workspace {
     pub next_pane_number: usize,
     pub(crate) recorded_rects: HashMap<TileId, egui::Rect>,
     pub moving_tile: Option<TileId>,
+    pub selecting_broadcast_tile: Option<TileId>,
     pub pty_wakeup_ctx: Option<egui::Context>,
     pub toggle_prefs_collapse_requested: bool,
 }
@@ -63,6 +64,7 @@ impl Workspace {
             next_pane_number: 2,
             recorded_rects: HashMap::new(),
             moving_tile: None,
+            selecting_broadcast_tile: None,
             pty_wakeup_ctx,
             toggle_prefs_collapse_requested: false,
         }
@@ -112,6 +114,9 @@ impl Workspace {
         if let Some(moving_id) = self.moving_tile {
             return InteractionMode::MovingPane(moving_id);
         }
+        if let Some(selecting_id) = self.selecting_broadcast_tile {
+            return InteractionMode::SelectingBroadcast(selecting_id);
+        }
         InteractionMode::Normal
     }
 
@@ -134,7 +139,7 @@ impl Workspace {
         let window_focused = ui.input(|i| i.focused);
         let popup_open = egui::Popup::is_any_open(ctx);
 
-        // フォーカス喪失・Esc押下・別画面オープン時はパネル移動モードを解除
+        // フォーカス喪失・Esc押下・別画面オープン時はパネル移動モード・ブロードキャスト選択モードを解除
         if !window_focused
             || prefs_capturing_keyboard
             || popup_open
@@ -144,6 +149,16 @@ impl Workspace {
             .is_some_and(|id| !matches!(self.tree.tiles.get(id), Some(Tile::Pane(_))))
         {
             self.moving_tile = None;
+        }
+        if !window_focused
+            || prefs_capturing_keyboard
+            || popup_open
+            || ui.input(|i| i.key_pressed(egui::Key::Escape))
+            || self
+                .selecting_broadcast_tile
+                .is_some_and(|id| !matches!(self.tree.tiles.get(id), Some(Tile::Pane(_))))
+        {
+            self.selecting_broadcast_tile = None;
         }
 
         let mode = self.current_interaction_mode(prefs_capturing_keyboard, prefs_capturing_pointer);
@@ -157,6 +172,9 @@ impl Workspace {
             pending_action: None,
             pending_move_toggle: None,
             pending_move_target: None,
+            pending_broadcast_toggle: None,
+            pending_broadcast_target: None,
+            pending_broadcast_inputs: Vec::new(),
             prefs_open,
             window_focused,
             popup_open,
@@ -169,9 +187,13 @@ impl Workspace {
         let pending_action = behavior.pending_action;
         let pending_move_toggle = behavior.pending_move_toggle;
         let pending_move_target = behavior.pending_move_target;
+        let pending_broadcast_toggle = behavior.pending_broadcast_toggle;
+        let pending_broadcast_target = behavior.pending_broadcast_target;
+        let pending_broadcast_inputs = behavior.pending_broadcast_inputs;
 
         // 1. パネル移動モード（[ ✥ ]）の状態遷移を処理
         if let Some(toggled_id) = pending_move_toggle {
+            self.selecting_broadcast_tile = None;
             match self.moving_tile {
                 Some(same_id) if same_id == toggled_id => {
                     self.moving_tile = None;
@@ -191,6 +213,45 @@ impl Workspace {
                 self.swap_panes(src_id, target_id);
                 self.moving_tile = None;
             }
+        }
+
+        // 1b. ブロードキャスト選択モード（[ ✥ ] 右クリック）の状態遷移を処理
+        if let Some(toggled_id) = pending_broadcast_toggle {
+            self.moving_tile = None;
+            match self.selecting_broadcast_tile {
+                Some(same_id) if same_id == toggled_id => {
+                    self.selecting_broadcast_tile = None;
+                    self.focused_tile = Some(toggled_id);
+                }
+                Some(src_id) => {
+                    self.link_broadcast_panes(src_id, toggled_id);
+                    self.selecting_broadcast_tile = None;
+                }
+                None => {
+                    let already_grouped = matches!(
+                        self.tree.tiles.get(toggled_id),
+                        Some(Tile::Pane(p)) if p.broadcast_group.is_some()
+                    );
+                    if already_grouped {
+                        self.leave_broadcast_group(toggled_id);
+                    } else {
+                        self.selecting_broadcast_tile = Some(toggled_id);
+                        self.focused_tile = Some(toggled_id);
+                    }
+                }
+            }
+        } else if let Some(target_id) = pending_broadcast_target {
+            if let Some(src_id) = self.selecting_broadcast_tile {
+                if src_id != target_id {
+                    self.link_broadcast_panes(src_id, target_id);
+                    self.selecting_broadcast_tile = None;
+                }
+            }
+        }
+
+        // 1c. ブロードキャストグループ内の他パネルへキー入力を転送
+        for (src_id, group_id, bytes) in pending_broadcast_inputs {
+            self.broadcast_input_to_group(src_id, group_id, &bytes);
         }
 
         // 2. パネル・タイトルバーからのアクションを実行
@@ -304,6 +365,9 @@ struct TreeBehavior<'a> {
     pending_action: Option<(TileId, TitleBarAction)>,
     pending_move_toggle: Option<TileId>,
     pending_move_target: Option<TileId>,
+    pending_broadcast_toggle: Option<TileId>,
+    pending_broadcast_target: Option<TileId>,
+    pending_broadcast_inputs: Vec<(TileId, usize, Vec<u8>)>,
     prefs_open: &'a mut bool,
     window_focused: bool,
     popup_open: bool,
@@ -329,17 +393,37 @@ impl<'a> egui_tiles::Behavior<TerminalPane> for TreeBehavior<'a> {
             mode: self.mode,
             external_zoom_delta: self.external_zoom_delta,
             is_selecting_text: pane.select_anchor_pos.is_some(),
+            broadcast_group: pane.broadcast_group,
         };
 
         let output = pane.ui(ui, &pane_ctx, self.menus, self.settings);
 
+        if !output.broadcast_input.is_empty() {
+            if let Some(group_id) = pane.broadcast_group {
+                self.pending_broadcast_inputs
+                    .push((tile_id, group_id, output.broadcast_input));
+            }
+        }
+
         if self.mode != InteractionMode::BlockedByModal {
-            if output.toggle_tile_move && !self.popup_open {
-                self.pending_move_toggle = Some(tile_id);
+            if pane_ctx.is_any_selecting_broadcast() && !self.popup_open {
+                if output.toggle_broadcast_select || output.toggle_tile_move {
+                    self.pending_broadcast_toggle = Some(tile_id);
+                } else if output.clicked_or_focused {
+                    self.pending_broadcast_target = Some(tile_id);
+                }
             } else if pane_ctx.is_any_moving() && !self.popup_open {
-                if output.clicked_or_focused {
+                if output.toggle_tile_move {
+                    self.pending_move_toggle = Some(tile_id);
+                } else if output.toggle_broadcast_select {
+                    self.pending_broadcast_toggle = Some(tile_id);
+                } else if output.clicked_or_focused {
                     self.pending_move_target = Some(tile_id);
                 }
+            } else if output.toggle_tile_move && !self.popup_open {
+                self.pending_move_toggle = Some(tile_id);
+            } else if output.toggle_broadcast_select && !self.popup_open {
+                self.pending_broadcast_toggle = Some(tile_id);
             } else {
                 if output.clicked_or_focused
                     && !matches!(
@@ -354,14 +438,6 @@ impl<'a> egui_tiles::Behavior<TerminalPane> for TreeBehavior<'a> {
                     *self.focused_tile = Some(tile_id);
                 }
 
-                if let Some(action) = output.action {
-                    if matches!(action, TitleBarAction::OpenPreferences) {
-                        *self.prefs_open = true;
-                    } else {
-                        self.pending_action = Some((tile_id, action));
-                    }
-                }
-                // TreeBehavior::pane_ui 内:
                 if let Some(action) = output.action {
                     match action {
                         TitleBarAction::OpenPreferences => {

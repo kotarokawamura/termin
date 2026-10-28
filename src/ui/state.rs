@@ -22,6 +22,8 @@ pub enum InteractionMode {
     Normal,
     /// `[ ✥ ]` クリックによるパネル移動（入れ替え先選択）モード
     MovingPane(TileId),
+    /// `[ ✥ ]` 右クリックによるブロードキャスト対象パネル選択モード
+    SelectingBroadcast(TileId),
     /// いずれかのパネルでタイトル名をインライン編集中
     EditingTitle(TileId),
     /// 設定ウィンドウ等のモーダル・別画面が開いている状態
@@ -39,6 +41,7 @@ pub struct PaneContext {
     pub mode: InteractionMode,
     pub external_zoom_delta: f32,
     pub is_selecting_text: bool,
+    pub broadcast_group: Option<usize>,
 }
 
 impl PaneContext {
@@ -61,9 +64,19 @@ impl PaneContext {
         matches!(self.mode, InteractionMode::MovingPane(_))
     }
 
+    /// このパネル自身が `[ ✥ ]` 右クリックによるブロードキャスト選択モードの選択元になっているか
+    pub fn is_selecting_broadcast_self(&self) -> bool {
+        self.mode == InteractionMode::SelectingBroadcast(self.tile_id)
+    }
+
+    /// ワークスペース内のいずれかのパネルがブロードキャスト選択モード中か
+    pub fn is_any_selecting_broadcast(&self) -> bool {
+        matches!(self.mode, InteractionMode::SelectingBroadcast(_))
+    }
+
     /// パネルおよびタイトルバーを「アクティブ色」で表示すべきか
     pub fn is_visually_active(&self) -> bool {
-        (self.is_focused || self.is_moving_self())
+        (self.is_focused || self.is_moving_self() || self.is_selecting_broadcast_self())
             && self.window_focused
             && !self.popup_open
             && !self.is_blocked()
@@ -79,6 +92,7 @@ impl PaneContext {
         self.is_visually_active()
             && !editing_own_title
             && !self.is_any_moving()
+            && !self.is_any_selecting_broadcast()
             && !context_menu_open
     }
 }

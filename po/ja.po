@@ -55,6 +55,9 @@ msgstr "保存済みレイアウトを読込"
 msgid "Drag and drop onto another pane to swap/split"
 msgstr "他のペインへドラッグ＆ドロップして入替・分割"
 
+msgid "Left-click: pane move mode / Right-click: broadcast selection mode (or leave group)"
+msgstr "左クリック: パネル移動モード / 右クリック: ブロードキャスト選択モード (またはグループ解除)"
+
 msgid "[Split-H]"
 msgstr "[左右分割]"
 
