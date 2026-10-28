@@ -49,3 +49,7 @@ impl SessionDriver for TmuxControlSession {
         self.alive
     }
 }
+
+#[cfg(test)]
+#[path = "test/tmux_cc_tests.rs"]
+mod tests;

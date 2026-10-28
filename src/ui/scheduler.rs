@@ -77,3 +77,7 @@ impl RepaintScheduler {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "test/scheduler_tests.rs"]
+mod tests;

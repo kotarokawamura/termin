@@ -685,7 +685,6 @@ impl TerminalPane {
             };
 
             let mut row_cells = Vec::with_capacity(cols.get() as usize);
-            let mut run_text = String::with_capacity(cols.get() as usize);
 
             for r in 0..rows.get() {
                 row_cells.clear();

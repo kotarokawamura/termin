@@ -200,3 +200,7 @@ impl SessionDriver for LocalPtySession {
         self.initial_cwd.clone().filter(|p| p.is_dir())
     }
 }
+
+#[cfg(test)]
+#[path = "test/local_pty_tests.rs"]
+mod tests;

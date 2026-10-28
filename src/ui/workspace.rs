@@ -352,9 +352,6 @@ impl Workspace {
                     pane.zoom_reset();
                 }
             }
-            TitleBarAction::OpenPreferences => {
-                *prefs_open = true;
-            }
             TitleBarAction::ClosePreferences => {
                 *prefs_open = false;
             }

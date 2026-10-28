@@ -95,4 +95,56 @@ mod tests {
             menu_size
         );
     }
+
+    #[test]
+    fn test_menu_context_presets_and_plugin_registration() {
+        use crate::menus::types::{MenuAction, MenuContext, MenuEntry};
+        use crate::menus::MenuManager;
+
+        let tile_id = egui_tiles::TileId::from_u64(42);
+        let pane_ctx = MenuContext::Pane(tile_id);
+        let title_ctx = MenuContext::Titlebar(tile_id);
+
+        assert_eq!(pane_ctx.kind(), MenuTargetKind::Pane);
+        assert_eq!(pane_ctx.tile_id(), tile_id);
+        assert_eq!(title_ctx.kind(), MenuTargetKind::Titlebar);
+        assert_eq!(title_ctx.tile_id(), tile_id);
+
+        let mut sc = ShortcutSettings::default();
+        sc.copy = "  ".to_string(); // Empty/whitespace shortcut should map to None
+
+        let pane_entries = default_entries_for(MenuTargetKind::Pane, &sc);
+        match &pane_entries[0] {
+            MenuEntry::Item {
+                shortcut,
+                action,
+                enabled,
+                ..
+            } => {
+                assert_eq!(*action, MenuAction::Copy);
+                assert!(shortcut.is_none());
+                assert!(*enabled);
+            }
+            _ => panic!("Expected Copy item first in Pane menu"),
+        }
+
+        let title_entries = default_entries_for(MenuTargetKind::Titlebar, &sc);
+        assert!(title_entries.iter().any(|e| matches!(
+            e,
+            MenuEntry::SubMenu { items, .. }
+            if items.iter().any(|i| matches!(i, MenuEntry::Item { action: MenuAction::SaveLayout, .. }))
+        )));
+
+        let mut mgr = MenuManager::new();
+        mgr.register_plugin_entry(
+            MenuTargetKind::Pane,
+            MenuEntry::item(
+                "🔌",
+                "Run Plugin",
+                Some("Ctrl+P"),
+                MenuAction::PluginCommand("my_plugin".to_string()),
+            ),
+        );
+        assert_eq!(mgr.plugin_entries.get(&MenuTargetKind::Pane).unwrap().len(), 1);
+    }
 }

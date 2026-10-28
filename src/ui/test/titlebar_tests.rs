@@ -352,5 +352,74 @@ mod tests {
             .textures_delta
             .clear();
     }
+
+    #[test]
+    fn test_grip_left_click_toggles_tile_move_mode() {
+        let ctx = egui::Context::default();
+        let menus = MenuManager::new();
+        let settings = ThemeSettings::default();
+        settings.apply_fonts(&ctx);
+        let mut title = "/bin/bash".to_string();
+        let mut editing = false;
+        let tile_id = egui_tiles::TileId::from_u64(1);
+        let pane_ctx = make_ctx(tile_id, true, true, false, None);
+
+        let raw_with_screen = || {
+            let mut r = egui::RawInput::default();
+            r.screen_rect = Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(500.0, 400.0),
+            ));
+            r
+        };
+
+        // Frame 1: initial layout
+        ctx.run_ui(raw_with_screen(), |ui| {
+            render_titlebar(ui, &pane_ctx, &menus, &mut title, &mut editing, &settings);
+        })
+        .textures_delta
+        .clear();
+
+        let grip_rect: egui::Rect = ctx
+            .data(|d| d.get_temp(egui::Id::new("grip_btn_rect")))
+            .unwrap();
+        let click_pos = grip_rect.center();
+
+        // Primary press + release on grip button triggers toggle_tile_move
+        let mut press = raw_with_screen();
+        press.events.push(egui::Event::PointerMoved(click_pos));
+        press.events.push(egui::Event::PointerButton {
+            pos: click_pos,
+            button: egui::PointerButton::Primary,
+            pressed: true,
+            modifiers: egui::Modifiers::NONE,
+        });
+        ctx.run_ui(press, |ui| {
+            render_titlebar(ui, &pane_ctx, &menus, &mut title, &mut editing, &settings);
+        })
+        .textures_delta
+        .clear();
+
+        let mut release = raw_with_screen();
+        release.events.push(egui::Event::PointerMoved(click_pos));
+        release.events.push(egui::Event::PointerButton {
+            pos: click_pos,
+            button: egui::PointerButton::Primary,
+            pressed: false,
+            modifiers: egui::Modifiers::NONE,
+        });
+        let mut move_toggled = false;
+        ctx.run_ui(release, |ui| {
+            let out = render_titlebar(ui, &pane_ctx, &menus, &mut title, &mut editing, &settings);
+            move_toggled = out.toggle_tile_move;
+        })
+        .textures_delta
+        .clear();
+
+        assert!(
+            move_toggled,
+            "Left-clicking the grip button must trigger toggle_tile_move"
+        );
+    }
 }
 

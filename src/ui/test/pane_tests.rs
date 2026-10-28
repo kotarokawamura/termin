@@ -623,3 +623,131 @@ fn test_broadcast_ui_right_click_select_ctrl_multiselect_and_self_unlink() {
     assert_eq!(g1_rem, Some(1));
     assert_eq!(g2_rem, Some(1));
 }
+
+#[test]
+fn test_workspace_tree_ops_split_tabs_swap_remove_focus_and_top_right() {
+    let mut ws = Workspace::new();
+    assert_eq!(ws.pane_count(), 1);
+    let initial_id = ws.focused_tile.unwrap();
+    if let Some(egui_tiles::Tile::Pane(pane)) = ws.tree.tiles.get_mut(initial_id) {
+        pane.title = "Pane1".to_string();
+    }
+
+    // Split horizontally -> 2 panes, focus moves to new pane p2
+    ws.split_pane(initial_id, SplitAxis::Horizontal);
+    assert_eq!(ws.pane_count(), 2);
+    let p2 = ws.focused_tile.unwrap();
+    if let Some(egui_tiles::Tile::Pane(pane)) = ws.tree.tiles.get_mut(p2) {
+        pane.title = "Pane2".to_string();
+    }
+
+    // Find the TileId of Pane1 (which was moved into the new Horizontal container)
+    let p1 = ws
+        .tree
+        .tiles
+        .iter()
+        .find_map(|(id, t)| match t {
+            egui_tiles::Tile::Pane(p) if p.title == "Pane1" => Some(*id),
+            _ => None,
+        })
+        .unwrap();
+
+    // Add tab on p2 -> creates Tabs container with p2 (moved) and p3 (active)
+    ws.add_tab(p2);
+    assert_eq!(ws.pane_count(), 3);
+    let p3 = ws.focused_tile.unwrap();
+    if let Some(egui_tiles::Tile::Pane(pane)) = ws.tree.tiles.get_mut(p3) {
+        pane.title = "Pane3".to_string();
+    }
+
+    // Add another tab into the same Tabs container -> 4 panes
+    ws.add_tab(p3);
+    assert_eq!(ws.pane_count(), 4);
+    let p4 = ws.focused_tile.unwrap();
+
+    // Focus adjacent panes (+1 and -1 wrap around)
+    ws.focus_adjacent_pane(1);
+    let next_f = ws.focused_tile.unwrap();
+    assert_ne!(next_f, p4);
+    ws.focus_adjacent_pane(-1);
+    assert_eq!(ws.focused_tile, Some(p4));
+
+    // Swap panes p1 and p4 -> p1's content ("Pane1") moves to p4's slot and focus becomes p4
+    ws.swap_panes(p1, p4);
+    assert_eq!(ws.focused_tile, Some(p4));
+    let swapped_title = match ws.tree.tiles.get(p4) {
+        Some(egui_tiles::Tile::Pane(pane)) => pane.title.clone(),
+        _ => String::new(),
+    };
+    assert_eq!(swapped_title, "Pane1");
+
+    // Top-right tile calculation from recorded_rects
+    ws.recorded_rects.clear();
+    ws.recorded_rects.insert(
+        p1,
+        egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(400.0, 300.0)),
+    );
+    ws.recorded_rects.insert(
+        p4,
+        egui::Rect::from_min_max(egui::pos2(400.0, 0.0), egui::pos2(800.0, 300.0)),
+    );
+    ws.update_top_right_tile();
+    assert_eq!(ws.top_right_tile, Some(p4));
+
+    // Remove focused pane p4 -> focus falls back to a valid remaining pane
+    ws.remove_pane(p4);
+    assert_eq!(ws.pane_count(), 3);
+    assert!(ws.focused_tile.is_some());
+    assert_ne!(ws.focused_tile, Some(p4));
+}
+
+#[test]
+fn test_pane_zoom_clamping_and_paste_forwarding() {
+    let (mut pane, written) = make_test_pane_with_recorder();
+    pane.broadcast_group = Some(1);
+    assert!((pane.zoom_scale - 1.0).abs() < f32::EPSILON);
+
+    for _ in 0..30 {
+        pane.zoom_in();
+    }
+    assert!((pane.zoom_scale - 3.5).abs() < f32::EPSILON);
+
+    for _ in 0..40 {
+        pane.zoom_out();
+    }
+    assert!((pane.zoom_scale - 0.4).abs() < f32::EPSILON);
+
+    pane.zoom_reset();
+    assert!((pane.zoom_scale - 1.0).abs() < f32::EPSILON);
+
+    // 1. Unrequested Event::Paste (e.g., raw Ctrl+V when paste is Ctrl+Shift+V) sends 0x16 (^V)
+    let ctx = egui::Context::default();
+    let mut raw_ctrl_v = egui::RawInput::default();
+    raw_ctrl_v
+        .events
+        .push(egui::Event::Paste("ignored".to_string()));
+    ctx.run_ui(raw_ctrl_v, |ui| {
+        pane.handle_keyboard_input(ui, false);
+    })
+    .textures_delta
+    .clear();
+    assert_eq!(&*written.lock().unwrap(), &[0x16]);
+
+    // 2. Requested paste (pending_paste = true) writes the pasted text and records broadcast input
+    written.lock().unwrap().clear();
+    pane.pending_broadcast_input.clear();
+    pane.pending_paste = true;
+
+    let mut raw_paste = egui::RawInput::default();
+    raw_paste
+        .events
+        .push(egui::Event::Paste("echo pasted".to_string()));
+    ctx.run_ui(raw_paste, |ui| {
+        pane.handle_keyboard_input(ui, false);
+    })
+    .textures_delta
+    .clear();
+
+    assert_eq!(&*written.lock().unwrap(), b"echo pasted");
+    assert_eq!(pane.pending_broadcast_input, b"echo pasted");
+}

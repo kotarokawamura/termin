@@ -470,57 +470,5 @@ fn ansi_idx_to_rgb(idx: u8) -> RgbColor {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_ansi_256_color_mapping() {
-        assert_eq!(ansi_idx_to_rgb(15), RgbColor(255, 255, 255));
-        // Index 16 is (0, 0, 0) in the 6x6x6 cube
-        assert_eq!(ansi_idx_to_rgb(16), RgbColor(0, 0, 0));
-        // Index 196 is pure red (5, 0, 0) -> (255, 0, 0)
-        assert_eq!(ansi_idx_to_rgb(196), RgbColor(255, 0, 0));
-        // Index 232 is darkest grayscale (8, 8, 8)
-        assert_eq!(ansi_idx_to_rgb(232), RgbColor(8, 8, 8));
-        // Index 255 is lightest grayscale (238, 238, 238)
-        assert_eq!(ansi_idx_to_rgb(255), RgbColor(238, 238, 238));
-    }
-
-    fn nz(v: u16) -> NonZeroU16 {
-        NonZeroU16::new(v).unwrap()
-    }
-
-    #[test]
-    fn test_wide_char_resize_does_not_insert_extra_spaces() {
-        let mut adapter = Vt100Adapter::new(nz(10), nz(40));
-        adapter.process_bytes("日本語テスト".as_bytes());
-        adapter.resize(nz(10), nz(50));
-        adapter.resize(nz(10), nz(40));
-
-        assert_eq!(adapter.read_cell(0, 0).ch, '日');
-        assert!(adapter.read_cell(0, 1).wide_continuation);
-        assert_eq!(adapter.read_cell(0, 2).ch, '本');
-        assert!(adapter.read_cell(0, 3).wide_continuation);
-        assert_eq!(adapter.read_cell(0, 4).ch, '語');
-    }
-
-    #[test]
-    fn test_scrollback_preserved_across_resize() {
-        let mut adapter = Vt100Adapter::new(nz(5), nz(40));
-        for i in 1..=20 {
-            adapter.process_bytes(format!("line {:02}\r\n", i).as_bytes());
-        }
-        assert!(adapter.max_scroll_offset() > 0);
-        let initial_max = adapter.max_scroll_offset();
-
-        adapter.resize(nz(5), nz(50));
-        assert_eq!(adapter.max_scroll_offset(), initial_max);
-
-        adapter.set_scroll_offset(initial_max);
-        assert_eq!(adapter.scroll_offset(), initial_max);
-        assert_eq!(adapter.read_cell(0, 0).ch, 'l');
-        assert_eq!(adapter.read_cell(0, 5).ch, '0');
-        assert_eq!(adapter.read_cell(0, 6).ch, '1');
-    }
-
-}
+#[path = "test/vt100_adapter_tests.rs"]
+mod tests;

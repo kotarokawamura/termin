@@ -460,49 +460,5 @@ pub fn tr_plural(msgid: &str, msgid_plural: &str, n: usize) -> String {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_po_parser_basic_and_multiline() {
-        let sample = r#"
-# Comment line
-msgid ""
-msgstr ""
-"Content-Type: text/plain; charset=UTF-8\n"
-"Language: ja\n"
-
-msgid "Copy"
-msgstr "コピー"
-
-msgid ""
-"Line one\n"
-"Line two"
-msgstr ""
-"1行目\n"
-"2行目"
-
-#, fuzzy
-msgid "Fuzzy entry"
-msgstr "曖昧な翻訳"
-"#;
-        let cat = PoCatalog::parse("ja", sample);
-        assert_eq!(cat.headers.get("Language").map(|s| s.as_str()), Some("ja"));
-        assert_eq!(cat.get("Copy"), "コピー");
-        assert_eq!(cat.get("Line one\nLine two"), "1行目\n2行目");
-        // Fuzzy entries are ignored and fall back to msgid
-        assert_eq!(cat.get("Fuzzy entry"), "Fuzzy entry");
-        assert_eq!(cat.get("Untranslated"), "Untranslated");
-    }
-
-    #[test]
-    fn test_embedded_catalogs_load() {
-        let ja = load_catalog_for_language("ja", "");
-        assert_eq!(ja.get("Copy"), "コピー");
-        assert_eq!(ja.get("Paste"), "ペースト");
-
-        let en = load_catalog_for_language("en", "");
-        assert_eq!(en.get("Copy"), "Copy");
-        assert_eq!(en.get("Paste"), "Paste");
-    }
-}
+#[path = "test/i18n_tests.rs"]
+mod tests;

@@ -96,3 +96,7 @@ impl PaneContext {
             && !context_menu_open
     }
 }
+
+#[cfg(test)]
+#[path = "test/state_tests.rs"]
+mod tests;
