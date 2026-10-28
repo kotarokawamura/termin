@@ -374,7 +374,7 @@ impl ThemeSettings {
     
     pub fn titlebar_bg(&self, is_active: bool) -> Color32 {
         if is_active {
-            parse_color(&self.title_active_bg).unwrap_or(Color32::from_rgb(200, 0, 3))
+            parse_color(&self.title_active_bg).unwrap_or(Color32::from_rgb(117, 33, 0))
         } else {
             parse_color(&self.title_inactive_bg).unwrap_or(Color32::from_rgb(75, 75, 75))
         }

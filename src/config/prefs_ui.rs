@@ -429,8 +429,8 @@ impl PreferencesWindow {
                     col2_width,
                     &tr("Active Title BG:"),
                     &mut settings.title_active_bg,
-                    egui::Color32::from_rgb(200, 0, 3),
-                    "Default (#c80003)",
+                    egui::Color32::from_rgb(117, 33, 0),
+                    "Default (#752100)",
                 );
                 changed |= color_row(
                     ui,

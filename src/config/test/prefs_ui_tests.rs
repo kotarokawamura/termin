@@ -111,7 +111,7 @@ mod tests {
         // Invalid color strings fall back to defaults
         s.title_active_bg = "invalid".to_string();
         s.title_inactive_bg = String::new();
-        assert_eq!(s.titlebar_bg(true), egui::Color32::from_rgb(200, 0, 3));
+        assert_eq!(s.titlebar_bg(true), egui::Color32::from_rgb(117, 33, 0));
         assert_eq!(s.titlebar_bg(false), egui::Color32::from_rgb(75, 75, 75));
 
         s.title_active_fg = "invalid".to_string();
