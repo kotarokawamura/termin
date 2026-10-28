@@ -129,7 +129,21 @@ impl Workspace {
         self.activate_tab_for_focused_pane();
     }
 
+    /// アクティブなパネル（または分割対象パネル）のカレントディレクトリを取得する
+    fn active_pane_working_dir(&self, target_id: TileId) -> Option<std::path::PathBuf> {
+        self.focused_tile
+            .and_then(|id| match self.tree.tiles.get(id) {
+                Some(Tile::Pane(pane)) => pane.current_working_dir(),
+                _ => None,
+            })
+            .or_else(|| match self.tree.tiles.get(target_id) {
+                Some(Tile::Pane(pane)) => pane.current_working_dir(),
+                _ => None,
+            })
+    }
+
     pub fn split_pane(&mut self, target_id: TileId, axis: SplitAxis) {
+        let working_dir = self.active_pane_working_dir(target_id);
         let Some(old_tile) = self.tree.tiles.remove(target_id) else {
             return;
         };
@@ -138,11 +152,12 @@ impl Workspace {
 
         let id_num = self.next_pane_number;
         self.next_pane_number += 1;
-        let new_pane = TerminalPane::new_with_wakeup(
+        let new_pane = TerminalPane::new_with_wakeup_and_cwd(
             id_num,
             &default_shell_title(),
             None,
             self.pty_wakeup_ctx.clone(),
+            working_dir.as_deref(),
         );
         let new_pane_id = self.tree.tiles.insert_pane(new_pane);
 
@@ -162,13 +177,15 @@ impl Workspace {
     }
 
     pub fn add_tab(&mut self, target_id: TileId) {
+        let working_dir = self.active_pane_working_dir(target_id);
         let id_num = self.next_pane_number;
         self.next_pane_number += 1;
-        let new_pane = TerminalPane::new_with_wakeup(
+        let new_pane = TerminalPane::new_with_wakeup_and_cwd(
             id_num,
             &default_shell_title(),
             None,
             self.pty_wakeup_ctx.clone(),
+            working_dir.as_deref(),
         );
         let new_pane_id = self.tree.tiles.insert_pane(new_pane);
 

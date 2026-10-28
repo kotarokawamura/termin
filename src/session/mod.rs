@@ -16,10 +16,15 @@
 pub mod local_pty;
 pub mod tmux_cc;
 
+use std::path::PathBuf;
+
 /// Abstract session driver for shell process IO and terminal multiplexers.
 pub trait SessionDriver {
     fn read_output(&mut self) -> Vec<u8>;
     fn write_input(&mut self, data: &[u8]);
     fn resize(&mut self, rows: core::num::NonZeroU16, cols: core::num::NonZeroU16);
     fn is_alive(&mut self) -> bool;
+    fn current_working_dir(&self) -> Option<PathBuf> {
+        None
+    }
 }

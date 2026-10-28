@@ -1,5 +1,6 @@
 // src/session/local_pty.rs
 use std::io::{Read, Write};
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc::{self, Receiver}, Arc};
 use std::thread;
@@ -14,6 +15,7 @@ pub struct LocalPtySession {
     rx: Receiver<Vec<u8>>,
     wakeup_pending: Arc<AtomicBool>,
     exited: Arc<AtomicBool>,
+    initial_cwd: Option<PathBuf>,
 }
 
 impl LocalPtySession {
@@ -28,10 +30,23 @@ impl LocalPtySession {
         startup_command: Option<&str>,
         wakeup_ctx: Option<egui::Context>,
     ) -> Self {
+        Self::new_with_cwd(rows, cols, startup_command, wakeup_ctx, None)
+    }
+
+    pub fn new_with_cwd(
+        rows: u16,
+        cols: u16,
+        startup_command: Option<&str>,
+        wakeup_ctx: Option<egui::Context>,
+        working_dir: Option<&Path>,
+    ) -> Self {
         let (tx, rx) = mpsc::channel();
         let wakeup_pending = Arc::new(AtomicBool::new(false));
         let exited = Arc::new(AtomicBool::new(false));
         let pty_system = native_pty_system();
+        let initial_cwd = working_dir
+            .filter(|d| d.is_dir())
+            .map(Path::to_path_buf);
 
         let pair = pty_system.openpty(PtySize {
             rows,
@@ -48,6 +63,10 @@ impl LocalPtySession {
                     cmd.arg("-c");
                     cmd.arg(command_str);
                 }
+            }
+            if let Some(dir) = &initial_cwd {
+                cmd.cwd(dir);
+                cmd.env("PWD", dir);
             }
 
             cmd.env("TERM", "xterm-256color");
@@ -89,6 +108,7 @@ impl LocalPtySession {
                 rx,
                 wakeup_pending,
                 exited,
+                initial_cwd,
             }
         } else {
             exited.store(true, Ordering::Release);
@@ -99,8 +119,16 @@ impl LocalPtySession {
                 rx,
                 wakeup_pending,
                 exited,
+                initial_cwd,
             }
         }
+    }
+
+    #[cfg(unix)]
+    fn read_proc_cwd(pid: u32) -> Option<PathBuf> {
+        std::fs::read_link(format!("/proc/{pid}/cwd"))
+            .ok()
+            .filter(|p| p.is_dir())
     }
 }
 
@@ -147,5 +175,28 @@ impl SessionDriver for LocalPtySession {
         } else {
             false
         }
+    }
+
+    fn current_working_dir(&self) -> Option<PathBuf> {
+        #[cfg(unix)]
+        {
+            if let Some(master) = &self.master {
+                if let Some(fg_pid) = master.process_group_leader() {
+                    if fg_pid > 0 {
+                        if let Some(dir) = Self::read_proc_cwd(fg_pid as u32) {
+                            return Some(dir);
+                        }
+                    }
+                }
+            }
+            if let Some(child) = &self.child {
+                if let Some(pid) = child.process_id() {
+                    if let Some(dir) = Self::read_proc_cwd(pid) {
+                        return Some(dir);
+                    }
+                }
+            }
+        }
+        self.initial_cwd.clone().filter(|p| p.is_dir())
     }
 }

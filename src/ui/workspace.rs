@@ -341,7 +341,16 @@ impl<'a> egui_tiles::Behavior<TerminalPane> for TreeBehavior<'a> {
                     self.pending_move_target = Some(tile_id);
                 }
             } else {
-                if output.clicked_or_focused {
+                if output.clicked_or_focused
+                    && !matches!(
+                        output.action,
+                        Some(
+                            TitleBarAction::SplitHorizontal
+                                | TitleBarAction::SplitVertical
+                                | TitleBarAction::NewTab
+                        )
+                    )
+                {
                     *self.focused_tile = Some(tile_id);
                 }
 

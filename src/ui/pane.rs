@@ -101,14 +101,25 @@ impl TerminalPane {
         startup_command: Option<&str>,
         wakeup_ctx: Option<egui::Context>,
     ) -> Self {
+        Self::new_with_wakeup_and_cwd(id, title, startup_command, wakeup_ctx, None)
+    }
+
+    pub fn new_with_wakeup_and_cwd(
+        id: usize,
+        title: &str,
+        startup_command: Option<&str>,
+        wakeup_ctx: Option<egui::Context>,
+        working_dir: Option<&std::path::Path>,
+    ) -> Self {
         let rows: core::num::NonZeroU16 = core::num::NonZeroU16::new(24).unwrap();
         let cols: core::num::NonZeroU16 = core::num::NonZeroU16::new(80).unwrap();
         let backend = Vt100Adapter::new(rows, cols);
-        let session = Box::new(LocalPtySession::new_with_command(
+        let session = Box::new(LocalPtySession::new_with_cwd(
             rows.get(),
             cols.get(),
             startup_command,
             wakeup_ctx,
+            working_dir,
         ));
 
         Self {
@@ -134,6 +145,10 @@ impl TerminalPane {
             last_rendered_sel: None,
             last_max_scroll: 0,
         }
+    }
+
+    pub fn current_working_dir(&self) -> Option<std::path::PathBuf> {
+        self.session.current_working_dir()
     }
 
     /// Read available bytes from PTY and feed them into the VTE backend.
