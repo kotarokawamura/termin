@@ -179,6 +179,18 @@ impl X11PinchListener {
     }
 }
 
+#[derive(Clone, Debug, Default)]
+pub struct AppStartupOptions {
+    pub fps_override: Option<u32>,
+    pub poll_mode: Option<PollMode>,
+    pub open_prefs_on_startup: bool,
+    pub maximize: bool,
+    pub debug_level: u8,
+    pub config_path: Option<std::path::PathBuf>,
+    pub config_json: Option<String>,
+    pub startup_command: Option<String>,
+}
+
 pub struct TerminApp {
     pub settings: ThemeSettings,
     pub workspace: Workspace,
@@ -199,26 +211,61 @@ impl TerminApp {
         poll_mode: PollMode,
         open_prefs_on_startup: bool,
     ) -> Self {
+        Self::new_with_options(
+            cc,
+            AppStartupOptions {
+                fps_override,
+                poll_mode: Some(poll_mode),
+                open_prefs_on_startup,
+                ..Default::default()
+            },
+        )
+    }
+
+    pub fn new_with_options(
+        cc: &eframe::CreationContext<'_>,
+        options: AppStartupOptions,
+    ) -> Self {
+        if let Some(ref custom_path) = options.config_path {
+            ThemeSettings::set_custom_config_path(Some(custom_path.clone()));
+        }
+
         let mut settings = ThemeSettings::load();
-        if let Some(fps) = fps_override {
+        if let Some(ref json_override) = options.config_json {
+            if let Err(err) = settings.apply_config_json(json_override) {
+                eprintln!("[termin] Warning: failed to apply --config-json: {err}");
+            }
+        }
+        if let Some(fps) = options.fps_override {
             settings.target_fps = fps.clamp(1, 240);
         }
 
-        cc.egui_ctx.options_mut(|options| {
-            options.quit_shortcuts.clear();
+        let poll_mode = options.poll_mode.unwrap_or(PollMode::EventDriven);
+
+        if options.debug_level >= 1 {
+            eprintln!(
+                "[termin][debug] Initialized settings from {:?} (target_fps={}, poll_mode={:?}, maximize={}, startup_command={:?})",
+                ThemeSettings::config_path(),
+                settings.target_fps,
+                poll_mode,
+                options.maximize,
+                options.startup_command,
+            );
+        }
+
+        cc.egui_ctx.options_mut(|egui_opts| {
+            egui_opts.quit_shortcuts.clear();
         });
-        // cc.egui_ctx.options_mut(|o| {
-        //     o.quit_shortcuts.push(KeyboardShortcut::new(
-        //             Modifiers::CTRL,
-        //             Key::Q,
-        //     ));
-        // });
 
         let scheduler = RepaintScheduler::new(poll_mode);
         let wakeup_ctx = scheduler.pty_wakeup_ctx(&cc.egui_ctx);
 
         cc.egui_ctx.options_mut(|o| o.zoom_with_keyboard = false);
         settings.apply_fonts(&cc.egui_ctx);
+        if options.maximize {
+            cc.egui_ctx
+                .send_viewport_cmd(egui::ViewportCommand::Maximized(true));
+        }
         cc.egui_ctx
             .send_viewport_cmd(egui::ViewportCommand::Focus);
 
@@ -229,11 +276,14 @@ impl TerminApp {
         let x11_pinch_init_attempted = x11_pinch_listener.is_some();
 
         let mut prefs_window = PreferencesWindow::default();
-        prefs_window.open = open_prefs_on_startup;
+        prefs_window.open = options.open_prefs_on_startup;
 
         Self {
             settings,
-            workspace: Workspace::new_with_wakeup(wakeup_ctx),
+            workspace: Workspace::new_with_wakeup_and_command(
+                wakeup_ctx,
+                options.startup_command.as_deref(),
+            ),
             prefs_window,
             menu_manager: MenuManager::new(),
             scheduler,

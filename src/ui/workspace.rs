@@ -46,11 +46,18 @@ impl Workspace {
     }
 
     pub fn new_with_wakeup(pty_wakeup_ctx: Option<egui::Context>) -> Self {
+        Self::new_with_wakeup_and_command(pty_wakeup_ctx, None)
+    }
+
+    pub fn new_with_wakeup_and_command(
+        pty_wakeup_ctx: Option<egui::Context>,
+        startup_command: Option<&str>,
+    ) -> Self {
         let mut tiles = Tiles::default();
         let first_pane = TerminalPane::new_with_wakeup(
             1,
             &default_shell_title(),
-            None,
+            startup_command,
             pty_wakeup_ctx.clone(),
         );
         let first_id = tiles.insert_pane(first_pane);

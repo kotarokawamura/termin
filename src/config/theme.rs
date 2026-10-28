@@ -116,8 +116,38 @@ impl Default for ThemeSettings {
         }
     }
 }
+static CUSTOM_CONFIG_PATH: std::sync::OnceLock<std::sync::RwLock<Option<PathBuf>>> =
+    std::sync::OnceLock::new();
+
+fn merge_json_values(base: &mut serde_json::Value, patch: serde_json::Value) {
+    match (base, patch) {
+        (serde_json::Value::Object(base_map), serde_json::Value::Object(patch_map)) => {
+            for (k, v) in patch_map {
+                merge_json_values(base_map.entry(k).or_insert(serde_json::Value::Null), v);
+            }
+        }
+        (base_slot, patch_val) => {
+            *base_slot = patch_val;
+        }
+    }
+}
+
 impl ThemeSettings {
+    pub fn set_custom_config_path(path: Option<PathBuf>) {
+        let lock = CUSTOM_CONFIG_PATH.get_or_init(|| std::sync::RwLock::new(None));
+        if let Ok(mut guard) = lock.write() {
+            *guard = path;
+        }
+    }
+
     pub fn config_path() -> PathBuf {
+        if let Some(lock) = CUSTOM_CONFIG_PATH.get() {
+            if let Ok(guard) = lock.read() {
+                if let Some(ref custom) = *guard {
+                    return custom.clone();
+                }
+            }
+        }
         let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
         PathBuf::from(home).join(".config/termin/config.json")
     }
@@ -149,6 +179,36 @@ impl ThemeSettings {
         let default_settings = Self::default();
         default_settings.apply_language();
         default_settings
+    }
+
+    /// Apply configuration overrides from a JSON string or a path to a JSON file (`-j, --config-json`).
+    pub fn apply_config_json(&mut self, json_str_or_path: &str) -> Result<(), String> {
+        let patch_val: serde_json::Value = serde_json::from_str(json_str_or_path)
+            .or_else(|e| {
+                let path = Path::new(json_str_or_path);
+                if path.exists() {
+                    let content = fs::read_to_string(path).map_err(|io_err| io_err.to_string())?;
+                    serde_json::from_str(&content).map_err(|je| je.to_string())
+                } else {
+                    Err(e.to_string())
+                }
+            })?;
+
+        let mut base_val = serde_json::to_value(&*self).map_err(|e| e.to_string())?;
+        merge_json_values(&mut base_val, patch_val);
+        let mut updated: Self = serde_json::from_value(base_val).map_err(|e| e.to_string())?;
+        if updated.font_path.is_empty() {
+            updated.font_path = default_debian_font_path().unwrap_or_default();
+        }
+        if updated.language.trim().is_empty() {
+            updated.language = "auto".to_string();
+        }
+        if updated.target_fps == 0 {
+            updated.target_fps = 30;
+        }
+        updated.apply_language();
+        *self = updated;
+        Ok(())
     }
 
     pub fn save(&self) {
