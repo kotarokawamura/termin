@@ -363,14 +363,14 @@ fn default_debian_font_path() -> Option<String> {
 
 fn default_debian_cjk_fallback() -> Option<String> {
     let candidates = [
-        "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
-        "/usr/share/fonts/opentype/noto/NotoSansMonoCJKjp-Regular.otf",
+        "/usr/share/fonts/opentype/noto/NotoSansMonoCJKjp-Regular.otf", // ← Mono（等幅）を最優先にする
         "/usr/share/fonts/truetype/vlgothic/VL-Gothic-Regular.ttf",
         "/usr/share/fonts/truetype/vlgothic/VL-Gothic-regular.ttf",
-        "/usr/share/fonts/truetype/fonts-japanese-gothic.ttf",
         "/usr/share/fonts/opentype/ipafont-gothic/ipag.ttf",
         "/usr/share/fonts/truetype/ipafont-gothic/ipag.ttf",
         "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf",
+        "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+        "/usr/share/fonts/truetype/fonts-japanese-gothic.ttf",
     ];
     for path in candidates {
         if Path::new(path).exists() {

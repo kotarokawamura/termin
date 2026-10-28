@@ -372,9 +372,9 @@ impl TerminalPane {
         let term_font_size =
             (settings.effective_terminal_font_size() * self.zoom_scale).clamp(6.0, 64.0);
         let font_id = egui::FontId::monospace(term_font_size);
-        // Use actual font glyph width instead of fixed 0.6 multiplier
+        // Stop hardcoding 0.6 and retrieve the actual width of a half-width character ('M' or '0') from the font.
         let char_w = ui
-            .fonts_mut(|f| f.glyph_width(&font_id, 'M'))
+            .fonts_mut(|f| f.glyph_width(&font_id, '0').max(f.glyph_width(&font_id, 'M')))
             .max(4.0);
 
         let ink_max_y = ui.fonts_mut(|f| f.row_height(&font_id));
@@ -722,6 +722,7 @@ impl TerminalPane {
                     ));
                 }
 
+                //Text rendering loop
                 let mut c: u16 = 0;
                 while c < cols.get() {
                     let cell = &row_cells[c as usize];
@@ -733,77 +734,30 @@ impl TerminalPane {
                     }
 
                     let fg_color = resolve_fg(cell);
+                    let cell_x = rect.min.x + pad + (c as f32) * char_w;
+                    let cell_span = if cell.wide { 2.0 } else { 1.0 };
 
-                    if cell.wide {
-                        let cell_x = rect.min.x + pad + (c as f32) * char_w;
-                        if cell.ch != ' ' && cell.ch != '\0' {
-                            let galley = ui.fonts_mut(|f| {
-                                f.layout_no_wrap(cell.ch.to_string(), font_id.clone(), fg_color)
-                            });
-                            cache.text_shapes.push(egui::Shape::galley(
-                                egui::pos2(cell_x, row_y + glyph_y_offset),
-                                galley,
-                                fg_color,
-                            ));
-                        }
-                        if cell.underline {
-                            let y = (row_y + glyph_y_offset + ink_max_y).min(row_y + char_h - 1.0);
-                            let ul_rect = egui::Rect::from_min_size(
-                                egui::pos2(cell_x, y),
-                                egui::vec2(char_w * 2.0, 1.0),
-                            );
-                            cache.bg_and_lines.push((ul_rect, fg_color));
-                        }
-                        c += 1;
-                        continue;
+                    if cell.ch != ' ' && cell.ch != '\0' {
+                        let galley = ui.fonts_mut(|f| {
+                            f.layout_no_wrap(cell.ch.to_string(), font_id.clone(), fg_color)
+                        });
+                        cache.text_shapes.push(egui::Shape::galley(
+                            egui::pos2(cell_x, row_y + glyph_y_offset),
+                            galley,
+                            fg_color,
+                        ));
                     }
 
-                    let start_c = c;
-                    let has_underline = cell.underline;
-                    run_text.clear();
-                    run_text.push(if cell.ch == '\0' { ' ' } else { cell.ch });
-                    c += 1;
-
-                    while c < cols.get() {
-                        let next = &row_cells[c as usize];
-                        if next.wide || next.wide_continuation || next.underline != has_underline {
-                            break;
-                        }
-                        if (next.ch == ' ' || next.ch == '\0') && !has_underline {
-                            let peek_empty = (c + 1 >= cols.get()) || {
-                                let peek = &row_cells[(c + 1) as usize];
-                                peek.ch == ' ' || peek.ch == '\0'
-                            };
-                            if peek_empty {
-                                break;
-                            }
-                        }
-                        if resolve_fg(next) != fg_color {
-                            break;
-                        }
-                        run_text.push(if next.ch == '\0' { ' ' } else { next.ch });
-                        c += 1;
-                    }
-
-                    let start_x = rect.min.x + pad + (start_c as f32) * char_w;
-                    let galley = ui.fonts_mut(|f| {
-                        f.layout_no_wrap(run_text.clone(), font_id.clone(), fg_color)
-                    });
-                    cache.text_shapes.push(egui::Shape::galley(
-                        egui::pos2(start_x, row_y + glyph_y_offset),
-                        galley,
-                        fg_color,
-                    ));
-
-                    if has_underline {
+                    if cell.underline {
                         let y = (row_y + glyph_y_offset + ink_max_y).min(row_y + char_h - 1.0);
-                        let width_px = ((c - start_c) as f32) * char_w;
                         let ul_rect = egui::Rect::from_min_size(
-                            egui::pos2(start_x, y),
-                            egui::vec2(width_px, 1.0),
+                            egui::pos2(cell_x, y),
+                            egui::vec2(char_w * cell_span, 1.0),
                         );
                         cache.bg_and_lines.push((ul_rect, fg_color));
                     }
+
+                    c += 1;
                 }
             }
 
