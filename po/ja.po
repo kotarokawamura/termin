@@ -137,6 +137,12 @@ msgstr "ペイン境界線の太さ (px):"
 msgid "Window Border Width (px):"
 msgstr "ウィンドウ枠の幅 (px):"
 
+msgid "Scrollbar:"
+msgstr "スクロールバー:"
+
+msgid "Show Scrollbar"
+msgstr "スクロールバーを表示"
+
 msgid "Empty = Default"
 msgstr "空欄 = デフォルト"
 

@@ -552,6 +552,18 @@ impl PreferencesWindow {
                     " FPS",
                 );
                 ui.end_row();
+
+                grid_label(ui, &tr("Scrollbar:"));
+                ui.horizontal(|ui| {
+                    ui.set_max_width(col2_width);
+                    if ui
+                        .checkbox(&mut settings.show_scrollbar, tr("Show Scrollbar"))
+                        .changed()
+                    {
+                        changed = true;
+                    }
+                });
+                ui.end_row();
             });
 
         changed

@@ -177,6 +177,14 @@ msgid "Window Border Width (px):"
 msgstr ""
 
 #: src/config/prefs_ui.rs
+msgid "Scrollbar:"
+msgstr ""
+
+#: src/config/prefs_ui.rs
+msgid "Show Scrollbar"
+msgstr ""
+
+#: src/config/prefs_ui.rs
 msgid "Empty = Default"
 msgstr ""
 

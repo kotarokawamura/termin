@@ -284,7 +284,11 @@ impl TerminalPane {
         // 2. Render terminal screen canvas + right-side scrollbar
         let available = ui.available_size();
         let (full_rect, _) = ui.allocate_exact_size(available, egui::Sense::hover());
-        let sb_width = SCROLLBAR_WIDTH.min((full_rect.width() * 0.2).max(4.0));
+        let sb_width = if settings.show_scrollbar {
+            SCROLLBAR_WIDTH.min((full_rect.width() * 0.2).max(4.0))
+        } else {
+            0.0
+        };
         let rect = egui::Rect::from_min_max(
             full_rect.min,
             egui::pos2((full_rect.max.x - sb_width).max(full_rect.min.x), full_rect.max.y),
@@ -313,14 +317,19 @@ impl TerminalPane {
         };
 
         let term_resp = ui.interact(rect, canvas_id, canvas_sense);
-        let scrollbar_resp = ui.interact(scrollbar_rect, scrollbar_id, canvas_sense);
+        let scrollbar_sense = if settings.show_scrollbar {
+            canvas_sense
+        } else {
+            egui::Sense::hover()
+        };
+        let scrollbar_resp = ui.interact(scrollbar_rect, scrollbar_id, scrollbar_sense);
 
         if !ctx.popup_open
             && !pointer_over_floating
             && (term_resp.clicked()
             || term_resp.drag_started()
-            || scrollbar_resp.clicked()
-            || scrollbar_resp.drag_started()
+            || (settings.show_scrollbar
+                && (scrollbar_resp.clicked() || scrollbar_resp.drag_started()))
             || (ui.input(|i| i.pointer.button_pressed(egui::PointerButton::Primary))
             && ui
             .input(|i| i.pointer.interact_pos())
@@ -359,7 +368,8 @@ impl TerminalPane {
             }
         });
 
-        let pane_hovered = (term_resp.hovered() || scrollbar_resp.hovered())
+        let pane_hovered = (term_resp.hovered()
+            || (settings.show_scrollbar && scrollbar_resp.hovered()))
             && !pointer_over_floating
             && !blocked
             && !ctx.popup_open;
@@ -512,7 +522,8 @@ impl TerminalPane {
         let thumb_h = (track_h * visible_frac).clamp(18.0_f32.min(track_h), track_h);
         let scrollable_track_h = (track_h - thumb_h).max(1.0);
 
-        if can_select_text
+        if settings.show_scrollbar
+            && can_select_text
             && max_scroll > 0
             && (scrollbar_resp.clicked() || scrollbar_resp.dragged())
         {
@@ -844,31 +855,33 @@ impl TerminalPane {
         // Draw right-side scrollbar track and thumb
         let scroll_off = self.backend.scroll_offset();
         let max_scroll = self.backend.max_scroll_offset();
-        painter.rect_filled(
-            scrollbar_rect,
-            0.0,
-            egui::Color32::from_rgb(26, 26, 26),
-        );
-        let top_ratio = if max_scroll > 0 {
-            1.0 - (scroll_off as f32 / max_scroll as f32).clamp(0.0, 1.0)
-        } else {
-            1.0
-        };
-        let thumb_y = scrollbar_rect.min.y + track_pad + top_ratio * scrollable_track_h;
-        let thumb_rect = egui::Rect::from_min_size(
-            egui::pos2(scrollbar_rect.min.x + 2.0, thumb_y),
-            egui::vec2((scrollbar_rect.width() - 4.0).max(2.0), thumb_h),
-        );
-        let thumb_color = if scrollbar_resp.dragged() {
-            egui::Color32::from_rgb(175, 175, 175)
-        } else if scrollbar_resp.hovered() || scroll_off > 0 {
-            egui::Color32::from_rgb(135, 135, 135)
-        } else if max_scroll > 0 {
-            egui::Color32::from_rgb(85, 85, 85)
-        } else {
-            egui::Color32::from_rgb(48, 48, 48)
-        };
-        painter.rect_filled(thumb_rect, 3.0, thumb_color);
+        if settings.show_scrollbar {
+            painter.rect_filled(
+                scrollbar_rect,
+                0.0,
+                egui::Color32::from_rgb(26, 26, 26),
+            );
+            let top_ratio = if max_scroll > 0 {
+                1.0 - (scroll_off as f32 / max_scroll as f32).clamp(0.0, 1.0)
+            } else {
+                1.0
+            };
+            let thumb_y = scrollbar_rect.min.y + track_pad + top_ratio * scrollable_track_h;
+            let thumb_rect = egui::Rect::from_min_size(
+                egui::pos2(scrollbar_rect.min.x + 2.0, thumb_y),
+                egui::vec2((scrollbar_rect.width() - 4.0).max(2.0), thumb_h),
+            );
+            let thumb_color = if scrollbar_resp.dragged() {
+                egui::Color32::from_rgb(175, 175, 175)
+            } else if scrollbar_resp.hovered() || scroll_off > 0 {
+                egui::Color32::from_rgb(135, 135, 135)
+            } else if max_scroll > 0 {
+                egui::Color32::from_rgb(85, 85, 85)
+            } else {
+                egui::Color32::from_rgb(48, 48, 48)
+            };
+            painter.rect_filled(thumb_rect, 3.0, thumb_color);
+        }
 
         if scroll_off > 0 {
             let badge_text = format!(" ↑ -{}/{} ", scroll_off, max_scroll.max(scroll_off));

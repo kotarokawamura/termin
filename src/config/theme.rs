@@ -76,6 +76,7 @@ pub struct ThemeSettings {
     pub separator_width: f32,
     pub frame_border_width: f32,
     pub target_fps: u32,
+    pub show_scrollbar: bool,
 
     // Font configuration
     pub font_path: String,
@@ -105,6 +106,7 @@ impl Default for ThemeSettings {
             separator_width: 2.0,
             frame_border_width: 5.0,
             target_fps: 30,
+            show_scrollbar: true,
             font_path: default_debian_font_path().unwrap_or_default(),
             ui_font_size: 13.0,
             terminal_font_size: 14.0,

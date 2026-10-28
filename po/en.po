@@ -137,6 +137,12 @@ msgstr "Pane Separator Width (px):"
 msgid "Window Border Width (px):"
 msgstr "Window Border Width (px):"
 
+msgid "Scrollbar:"
+msgstr "Scrollbar:"
+
+msgid "Show Scrollbar"
+msgstr "Show Scrollbar"
+
 msgid "Empty = Default"
 msgstr "Empty = Default"
 
