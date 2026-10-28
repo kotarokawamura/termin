@@ -119,46 +119,9 @@ pub fn render_titlebar(
         output.clicked = true;
     }
 
-    let split_h_resp = small_bar_button(
-        &mut child_ui,
-        &tr("[Split-H]"),
-        fg_color,
-        btn_sense,
-        &tr("Split Horizontally (Left/Right)"),
-    );
-    if can_interact && !any_moving && split_h_resp.clicked() {
-        output.action = Some(TitleBarAction::SplitHorizontal);
-        output.clicked = true;
-    }
-
-    let split_v_resp = small_bar_button(
-        &mut child_ui,
-        &tr("[Split-V]"),
-        fg_color,
-        btn_sense,
-        &tr("Split Vertically (Top/Bottom)"),
-    );
-    if can_interact && !any_moving && split_v_resp.clicked() {
-        output.action = Some(TitleBarAction::SplitVertical);
-        output.clicked = true;
-    }
-
-    let new_tab_resp = small_bar_button(
-        &mut child_ui,
-        &tr("[+Tab]"),
-        fg_color,
-        btn_sense,
-        &tr("Add a new tab in this pane"),
-    );
-    if can_interact && !any_moving && new_tab_resp.clicked() {
-        output.action = Some(TitleBarAction::NewTab);
-        output.clicked = true;
-    }
-
     let left_controls_right_x = child_ui.cursor().min.x;
 
     // 2. Right-side controls
-    let mut just_started_editing = false;
     let mut right_controls_left_x = bar_rect.max.x;
     let mut title_label_rect = egui::Rect::NOTHING;
 
@@ -194,19 +157,6 @@ pub fn render_titlebar(
                 output.clicked = true;
             }
         }
-
-        let edit_btn_resp =
-            small_bar_button(ui, " ✎ ", fg_color, btn_sense, &tr("Rename pane title"));
-        if can_interact && !any_moving && edit_btn_resp.clicked() {
-            *editing_title = !*editing_title;
-            if *editing_title {
-                just_started_editing = true;
-            }
-            output.clicked = true;
-        }
-        #[cfg(test)]
-        ui.ctx()
-            .data_mut(|d| d.insert_temp(egui::Id::new("edit_btn_rect"), edit_btn_resp.rect));
 
         if small_bar_button(
             ui,
@@ -260,7 +210,7 @@ pub fn render_titlebar(
             ui.ctx()
                 .data_mut(|d| d.insert_temp(egui::Id::new("edit_text_rect"), edit_resp.rect));
 
-            if just_started_editing || (!edit_resp.has_focus() && !edit_resp.lost_focus()) {
+            if !edit_resp.has_focus() && !edit_resp.lost_focus() {
                 edit_resp.request_focus();
             } else if edit_resp.lost_focus()
                 || ui.input(|i| {
