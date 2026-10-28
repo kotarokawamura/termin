@@ -215,36 +215,38 @@ impl Workspace {
             }
         }
 
+        let multi_select_modifier = ui.input(|i| {
+            i.modifiers.ctrl
+                || i.modifiers.command
+                || i.modifiers.mac_cmd
+                || i.events.iter().any(|ev| match ev {
+                    egui::Event::PointerButton { modifiers, .. }
+                    | egui::Event::Key { modifiers, .. } => {
+                        modifiers.ctrl || modifiers.command || modifiers.mac_cmd
+                    }
+                    _ => false,
+                })
+        });
+
         // 1b. ブロードキャスト選択モード（[ ✥ ] 右クリック）の状態遷移を処理
         if let Some(toggled_id) = pending_broadcast_toggle {
             self.moving_tile = None;
-            match self.selecting_broadcast_tile {
-                Some(same_id) if same_id == toggled_id => {
-                    self.selecting_broadcast_tile = None;
-                    self.focused_tile = Some(toggled_id);
-                }
-                Some(src_id) => {
-                    self.link_broadcast_panes(src_id, toggled_id);
-                    self.selecting_broadcast_tile = None;
-                }
-                None => {
-                    let already_grouped = matches!(
-                        self.tree.tiles.get(toggled_id),
-                        Some(Tile::Pane(p)) if p.broadcast_group.is_some()
-                    );
-                    if already_grouped {
-                        self.leave_broadcast_group(toggled_id);
-                    } else {
-                        self.selecting_broadcast_tile = Some(toggled_id);
-                        self.focused_tile = Some(toggled_id);
-                    }
-                }
-            }
+            self.selecting_broadcast_tile = Some(toggled_id);
+            self.focused_tile = Some(toggled_id);
         } else if let Some(target_id) = pending_broadcast_target {
             if let Some(src_id) = self.selecting_broadcast_tile {
-                if src_id != target_id {
-                    self.link_broadcast_panes(src_id, target_id);
+                if src_id == target_id {
+                    // 自分自身を選択した場合はブロードキャストグループから解除して選択モード終了
+                    self.leave_broadcast_group(src_id);
                     self.selecting_broadcast_tile = None;
+                    self.focused_tile = Some(src_id);
+                } else {
+                    // 別のパネルを選択した場合は同じブロードキャストグループにする
+                    self.link_broadcast_panes(src_id, target_id);
+                    // Ctrl (macOS では Command) を押しながらクリックした場合は選択モードを継続して複数選択可能にする
+                    if !multi_select_modifier {
+                        self.selecting_broadcast_tile = None;
+                    }
                 }
             }
         }
@@ -407,9 +409,7 @@ impl<'a> egui_tiles::Behavior<TerminalPane> for TreeBehavior<'a> {
 
         if self.mode != InteractionMode::BlockedByModal {
             if pane_ctx.is_any_selecting_broadcast() && !self.popup_open {
-                if output.toggle_broadcast_select || output.toggle_tile_move {
-                    self.pending_broadcast_toggle = Some(tile_id);
-                } else if output.clicked_or_focused {
+                if output.toggle_broadcast_select || output.clicked_or_focused {
                     self.pending_broadcast_target = Some(tile_id);
                 }
             } else if pane_ctx.is_any_moving() && !self.popup_open {

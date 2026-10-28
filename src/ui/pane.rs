@@ -358,10 +358,14 @@ impl TerminalPane {
             || term_resp.drag_started()
             || (settings.show_scrollbar
                 && (scrollbar_resp.clicked() || scrollbar_resp.drag_started()))
-            || (ui.input(|i| i.pointer.button_pressed(egui::PointerButton::Primary))
-            && ui
-            .input(|i| i.pointer.interact_pos())
-            .is_some_and(|p| pane_rect.contains(p))))
+            || (!any_selecting_pane
+                && ui.input(|i| i.pointer.button_pressed(egui::PointerButton::Primary))
+                && ui
+                    .input(|i| i.pointer.interact_pos())
+                    .is_some_and(|p| pane_rect.contains(p)))
+            || (any_selecting_pane
+                && (term_resp.secondary_clicked()
+                    || (settings.show_scrollbar && scrollbar_resp.secondary_clicked()))))
         {
             if let Some(focused_id) = ui.ctx().memory(|m| m.focused()) {
                 if focused_id != canvas_id {

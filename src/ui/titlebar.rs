@@ -105,8 +105,13 @@ pub fn render_titlebar(
     } else {
         egui::Sense::hover()
     };
+    let right_btn_sense = if can_interact && !any_selecting_pane {
+        egui::Sense::CLICK
+    } else {
+        egui::Sense::hover()
+    };
 
-    // 1. Left controls: [ ✥ ] button (Left-click: pane move mode, Right-click: broadcast selection mode / leave group)
+    // 1. Left controls: [ ✥ ] button (Left-click: pane move mode, Right-click: broadcast selection mode)
     let grip_color = if is_moving_self {
         egui::Color32::from_rgb(250, 204, 21)
     } else if is_selecting_broadcast_self {
@@ -120,17 +125,29 @@ pub fn render_titlebar(
     let grip_resp = child_ui
         .add(grip_btn)
         .on_hover_text(tr(
-            "Left-click: pane move mode / Right-click: broadcast selection mode (or leave group)",
+            "Left-click: pane move mode / Right-click: broadcast selection mode (select self to leave)",
         ));
     #[cfg(test)]
-    ui.ctx()
-        .data_mut(|d| d.insert_temp(egui::Id::new("grip_btn_rect"), grip_resp.rect));
+    ui.ctx().data_mut(|d| {
+        d.insert_temp(egui::Id::new("grip_btn_rect"), grip_resp.rect);
+        d.insert_temp(
+            egui::Id::new(("grip_btn_rect", ctx.tile_id)),
+            grip_resp.rect,
+        );
+    });
 
     let pointer_pos = ui.input(|i| i.pointer.interact_pos().or_else(|| i.pointer.latest_pos()));
     let pointer_on_grip = pointer_pos.is_some_and(|p| grip_resp.rect.contains(p));
 
     if can_interact && !*editing_title {
-        if grip_resp.clicked() || (pointer_on_grip && bar_resp.clicked()) {
+        if any_selecting_broadcast {
+            if grip_resp.clicked()
+                || grip_resp.secondary_clicked()
+                || (pointer_on_grip && (bar_resp.clicked() || bar_resp.secondary_clicked()))
+            {
+                output.clicked = true;
+            }
+        } else if grip_resp.clicked() || (pointer_on_grip && bar_resp.clicked()) {
             output.toggle_tile_move = true;
             output.clicked = true;
         } else if grip_resp.secondary_clicked()
@@ -173,7 +190,7 @@ pub fn render_titlebar(
     let mut title_label_rect = egui::Rect::NOTHING;
 
     child_ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-        if small_bar_button(ui, " × ", fg_color, btn_sense, &tr("Close this pane")).clicked()
+        if small_bar_button(ui, " × ", fg_color, right_btn_sense, &tr("Close this pane")).clicked()
             && can_interact
             && !any_selecting_pane
         {
@@ -186,7 +203,7 @@ pub fn render_titlebar(
                 ui,
                 " 🗖 ",
                 fg_color,
-                btn_sense,
+                right_btn_sense,
                 &tr("Maximize / Restore window"),
             )
                 .clicked()
@@ -196,7 +213,7 @@ pub fn render_titlebar(
                 output.action = Some(TitleBarAction::ToggleMaximizeWindow);
                 output.clicked = true;
             }
-            if small_bar_button(ui, " — ", fg_color, btn_sense, &tr("Minimize window")).clicked()
+            if small_bar_button(ui, " — ", fg_color, right_btn_sense, &tr("Minimize window")).clicked()
                 && can_interact
                 && !any_selecting_pane
             {
@@ -209,7 +226,7 @@ pub fn render_titlebar(
             ui,
             " ⚙ ",
             fg_color,
-            btn_sense,
+            right_btn_sense,
             &tr("Open CustomDragBar Preferences"),
         )
             .clicked()
@@ -389,10 +406,7 @@ pub fn render_titlebar(
         && !output.toggle_tile_move
         && !output.toggle_broadcast_select
     {
-        if (in_middle_now && ui.input(|i| i.pointer.button_pressed(egui::PointerButton::Primary)))
-            || bar_resp.clicked()
-            || bar_resp.secondary_clicked()
-        {
+        if bar_resp.clicked() || bar_resp.secondary_clicked() {
             output.clicked = true;
         }
     }

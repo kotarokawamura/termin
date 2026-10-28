@@ -55,8 +55,8 @@ msgstr "Load Saved Layout"
 msgid "Drag and drop onto another pane to swap/split"
 msgstr "Drag and drop onto another pane to swap/split"
 
-msgid "Left-click: pane move mode / Right-click: broadcast selection mode (or leave group)"
-msgstr "Left-click: pane move mode / Right-click: broadcast selection mode (or leave group)"
+msgid "Left-click: pane move mode / Right-click: broadcast selection mode (select self to leave)"
+msgstr "Left-click: pane move mode / Right-click: broadcast selection mode (select self to leave)"
 
 msgid "[Split-H]"
 msgstr "[Split-H]"

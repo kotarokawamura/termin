@@ -449,3 +449,177 @@ fn test_broadcast_groups_numbering_key_forwarding_and_unlinking() {
     assert_eq!(g1_after, None);
     assert_eq!(g2_after, Some(2));
 }
+
+#[test]
+fn test_broadcast_ui_right_click_select_ctrl_multiselect_and_self_unlink() {
+    let mut ws = Workspace::new();
+    let first_id = ws.focused_tile.unwrap();
+    ws.split_pane(first_id, SplitAxis::Horizontal);
+    let second_id = ws.focused_tile.unwrap();
+    ws.split_pane(second_id, SplitAxis::Vertical);
+    ws.split_pane(first_id, SplitAxis::Vertical);
+
+    let pane_ids: Vec<egui_tiles::TileId> = ws
+        .tree
+        .tiles
+        .iter()
+        .filter_map(|(id, tile)| matches!(tile, egui_tiles::Tile::Pane(_)).then_some(*id))
+        .collect();
+    assert_eq!(pane_ids.len(), 4);
+
+    let ctx = egui::Context::default();
+    let mut settings = ThemeSettings::default();
+    settings.apply_fonts(&ctx);
+    let menus = MenuManager::new();
+    let mut prefs_open = false;
+    let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1000.0, 800.0));
+
+    let mut run_frame = |ws: &mut Workspace, events: Vec<egui::Event>| {
+        let mut raw = egui::RawInput::default();
+        raw.screen_rect = Some(screen);
+        raw.focused = true;
+        raw.events = events;
+        ctx.run_ui(raw, |ui| {
+            let ctx_clone = ui.ctx().clone();
+            ws.ui(
+                ui,
+                &ctx_clone,
+                &mut settings,
+                &menus,
+                &mut prefs_open,
+                false,
+                false,
+                false,
+                1.0,
+            );
+        })
+        .textures_delta
+        .clear();
+    };
+
+    // Frame 0: initial layout so rects are recorded
+    run_frame(&mut ws, Vec::new());
+
+    let grip0: egui::Rect = ctx
+        .data(|d| d.get_temp(egui::Id::new(("grip_btn_rect", pane_ids[0]))))
+        .unwrap();
+    let pane0_center = ws.recorded_rects[&pane_ids[0]].center();
+    let pane1_center = ws.recorded_rects[&pane_ids[1]].center();
+    let pane2_center = ws.recorded_rects[&pane_ids[2]].center();
+
+    let mut click_at = |ws: &mut Workspace,
+                        pos: egui::Pos2,
+                        button: egui::PointerButton,
+                        modifiers: egui::Modifiers| {
+        run_frame(
+            ws,
+            vec![
+                egui::Event::PointerMoved(pos),
+                egui::Event::PointerButton {
+                    pos,
+                    button,
+                    pressed: true,
+                    modifiers,
+                },
+            ],
+        );
+        run_frame(
+            ws,
+            vec![
+                egui::Event::PointerMoved(pos),
+                egui::Event::PointerButton {
+                    pos,
+                    button,
+                    pressed: false,
+                    modifiers,
+                },
+            ],
+        );
+    };
+
+    // 1. Right-click grip button on pane 0 -> enters broadcast selection mode
+    click_at(
+        &mut ws,
+        grip0.center(),
+        egui::PointerButton::Secondary,
+        egui::Modifiers::NONE,
+    );
+    assert_eq!(ws.selecting_broadcast_tile, Some(pane_ids[0]));
+
+    // 2. Ctrl + Right-click on pane 1 -> links pane 0 and pane 1 into Group 1, and stays in broadcast selection mode!
+    let ctrl_mods = egui::Modifiers {
+        ctrl: true,
+        command: true,
+        ..egui::Modifiers::NONE
+    };
+    click_at(
+        &mut ws,
+        pane1_center,
+        egui::PointerButton::Secondary,
+        ctrl_mods,
+    );
+    assert_eq!(
+        ws.selecting_broadcast_tile,
+        Some(pane_ids[0]),
+        "Holding Ctrl/Command while selecting must keep broadcast selection mode active"
+    );
+
+    // 3. Right-click on pane 2 (without Ctrl) -> adds pane 2 to Group 1 and finishes selection mode!
+    click_at(
+        &mut ws,
+        pane2_center,
+        egui::PointerButton::Secondary,
+        egui::Modifiers::NONE,
+    );
+    assert_eq!(ws.selecting_broadcast_tile, None);
+
+    for &pid in &pane_ids[0..3] {
+        let g = match ws.tree.tiles.get(pid) {
+            Some(egui_tiles::Tile::Pane(p)) => p.broadcast_group,
+            _ => None,
+        };
+        assert_eq!(g, Some(1));
+    }
+
+    // 4. Right-click grip button on pane 0 (already in Group 1) -> enters broadcast selection mode (does NOT immediately unlink!)
+    click_at(
+        &mut ws,
+        grip0.center(),
+        egui::PointerButton::Secondary,
+        egui::Modifiers::NONE,
+    );
+    assert_eq!(ws.selecting_broadcast_tile, Some(pane_ids[0]));
+    let g0_still = match ws.tree.tiles.get(pane_ids[0]) {
+        Some(egui_tiles::Tile::Pane(p)) => p.broadcast_group,
+        _ => None,
+    };
+    assert_eq!(
+        g0_still,
+        Some(1),
+        "Right-clicking grip on a grouped pane must enter broadcast selection mode without immediately unlinking"
+    );
+
+    // 5. Select self (pane 0) -> unlinks pane 0 from Group 1 and exits selection mode, while pane 1 and pane 2 stay in Group 1
+    click_at(
+        &mut ws,
+        pane0_center,
+        egui::PointerButton::Primary,
+        egui::Modifiers::NONE,
+    );
+    assert_eq!(ws.selecting_broadcast_tile, None);
+    let g0_unlinked = match ws.tree.tiles.get(pane_ids[0]) {
+        Some(egui_tiles::Tile::Pane(p)) => p.broadcast_group,
+        _ => None,
+    };
+    let g1_rem = match ws.tree.tiles.get(pane_ids[1]) {
+        Some(egui_tiles::Tile::Pane(p)) => p.broadcast_group,
+        _ => None,
+    };
+    let g2_rem = match ws.tree.tiles.get(pane_ids[2]) {
+        Some(egui_tiles::Tile::Pane(p)) => p.broadcast_group,
+        _ => None,
+    };
+    assert_eq!(g0_unlinked, None);
+    assert_eq!(g1_rem, Some(1));
+    assert_eq!(g2_rem, Some(1));
+}

@@ -159,17 +159,17 @@ impl Workspace {
             return;
         }
 
-        let dst_group = match self.tree.tiles.get(dst_id) {
-            Some(Tile::Pane(p)) => p.broadcast_group,
-            _ => None,
-        };
         let src_group = match self.tree.tiles.get(src_id) {
             Some(Tile::Pane(p)) => p.broadcast_group,
             _ => None,
         };
+        let dst_group = match self.tree.tiles.get(dst_id) {
+            Some(Tile::Pane(p)) => p.broadcast_group,
+            _ => None,
+        };
 
-        let group_id = dst_group
-            .or(src_group)
+        let group_id = src_group
+            .or(dst_group)
             .unwrap_or_else(|| self.next_available_broadcast_group_id());
 
         if let Some(Tile::Pane(src_pane)) = self.tree.tiles.get_mut(src_id) {
